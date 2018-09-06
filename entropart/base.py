@@ -715,7 +715,7 @@ def best_partition(
             delta = pgraph._try_move_node(
                 r_node,
                 r_part,
-                bruteforce=True,
+                bruteforce=False,
                 **kwargs
             )
 
