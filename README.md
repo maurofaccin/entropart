@@ -1,11 +1,11 @@
-#MarkPart
+# EntroPart
 
-this is Markpart, a graph partition tool based on markovianity of the
+this is Entropart, a graph partitioning tool based on markovianity of the
 projected process.
 
 ## License
 
-Copyright: Mauro Faccin (2015)
+Copyright: Mauro Faccin (2018)
 
 MarkPart is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
