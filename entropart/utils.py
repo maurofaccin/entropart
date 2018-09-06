@@ -3,6 +3,7 @@
 
 import numpy as np
 from scipy import sparse
+from entropart import base
 
 
 def entropy(array):
@@ -31,21 +32,20 @@ def value(pgraph, alpha=0.0):
     return (2 - alpha) * h1 - h2
 
 
-def get_probabilities(edges, node_num, symmetric=False):
+def get_probabilities(edges, node_num,
+                      symmetric=False,
+                      return_transition=False):
     """Compute p_ij and p_i at the steady state"""
-    graph = sparse.coo_matrix(
-        (
-            # data
-            [e[2] for e in edges],
-            # i and j
-            ([e[1] for e in edges], [e[0] for e in edges])
-        ),
-        shape=(node_num, node_num)
-    )
-    graph = sparse.csr_matrix(graph)
-    steadystate = graph.sum(0)
 
     if symmetric:
+        edges += [
+            (j, i, w) for i, j, w in edges
+        ]
+
+    graph = edgelist2csr_sparse(edges, node_num)
+    steadystate = graph.sum(0)
+
+    if symmetric and not return_transition:
         return (
             graph / graph.sum(),
             np.array(steadystate).flatten() / graph.sum()
@@ -56,7 +56,9 @@ def get_probabilities(edges, node_num, symmetric=False):
 
     diff = 1.0
     count = 0
-    steadystate = np.array(steadystate).reshape(4, 1) / steadystate.sum()
+    print(steadystate)
+    steadystate = np.array(steadystate).reshape(-1, 1) / steadystate.sum()
+    print(steadystate)
     while diff > 1e-10:
         old_ss = steadystate.copy()
         steadystate = transition @ steadystate
@@ -65,5 +67,43 @@ def get_probabilities(edges, node_num, symmetric=False):
         if count > 1e5:
             break
 
-    diag = sparse.spdiags(steadystate.reshape((1, 4)), [0], node_num, node_num)
-    return transition @ diag, np.array(steadystate).flatten()
+    diag = sparse.spdiags(steadystate.reshape((1, -1)), [0], node_num, node_num)
+    if return_transition:
+        return transition, diag, np.array(steadystate).flatten()
+    else:
+        return transition @ diag, np.array(steadystate).flatten()
+
+
+def edgelist2csr_sparse(edgelist, node_num):
+    """Edges as [(i, j, weight), …]"""
+    graph = sparse.coo_matrix(
+        (
+            # data
+            [e[2] for e in edgelist],
+            # i and j
+            ([e[1] for e in edgelist], [e[0] for e in edgelist])
+        ),
+        shape=(node_num, node_num)
+    )
+    return sparse.csr_matrix(graph)
+
+
+def partition2coo_sparse(part):
+    """from dict {(i, j, k, …): weight, …}"""
+    n_n = len(part)
+    n_p = len(np.unique(list(part.values())))
+    return sparse.coo_matrix(
+        (np.ones(n_n), (list(part.keys()), list(part.values()))),
+        shape=(n_n, n_p),
+        dtype=float,
+    )
+
+
+def kron(A, B):
+    dok = {}
+    for n in range(A.shape[0]):
+        for pA in A.paths_through_node(n, position=-1):
+            for pB in B.paths_through_node(n):
+                dok[tuple(list(pA) + list(pB))] = A[pA] * B[pB]
+
+    return base.SparseMat(dok)

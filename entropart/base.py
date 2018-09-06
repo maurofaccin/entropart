@@ -45,13 +45,16 @@ class PGraph(object):
                 format='coo'
             )
         else:
-            jes = [
-                init_part[self._i2n[i]] for i in range(len(self._n2i))
-            ]
-            _part = sparse.coo_matrix(
-                (np.ones(nn), (np.arange(nn), jes)),
-                shape=(nn, len(np.unique(jes))),
-                dtype=float,
+            # jes = [
+            #     init_part[self._i2n[i]] for i in range(len(self._n2i))
+            # ]
+            # _part = sparse.coo_matrix(
+            #     (np.ones(nn), (np.arange(nn), jes)),
+            #     shape=(nn, len(np.unique(jes))),
+            #     dtype=float,
+            # )
+            _part = utils.partition2coo_sparse(
+                {self._n2i[k]: v for k, v in init_part.items()}
             )
 
         # save the partition as a double dict
@@ -71,7 +74,11 @@ class PGraph(object):
                 (self._n2i[i], self._n2i[j], w)
                 for i, j, w in _graph.edges.data('weight', default=1.0)
             ]
-            pij, pi = utils.get_probabilities(edges, nn, not self._isdirected)
+            pij, pi = utils.get_probabilities(
+                edges, nn,
+                symmetric=not self._isdirected,
+                return_transition=False
+            )
 
             # projected probabilities
             p_pij = _part.transpose() @ pij @ _part
@@ -541,6 +548,12 @@ class SparseMat(object):
             ]
         return SparseMat(slist, node_num=self._nn)
 
+    def paths_through_node(self, node, position=0):
+        return [p for p in self.__p_thr[node] if p[position] == node]
+
+    def __getitem__(self, item):
+        return self._dok[item]
+
     def __iadd__(self, other):
         for p, d in other._dok.items():
             self._dok[p] = self._dok.get(p, 0.0) + d
@@ -612,7 +625,41 @@ def entrogram(graph, partition, depth=3):
     :returns: TODO
 
     """
-    raise NotImplementedError()
+    # node to index map
+    n2i = {n: i for i, n in enumerate(graph.nodes())}
+    i2p = {n2i[n]: p for n, p in partition.items()}
+    n_n = len(n2i)
+    n_p = len(np.unique(list(i2p.values())))
+
+    edges = [
+        (n2i[i], n2i[j], w)
+        for i, j, w in graph.edges.data('weight', default=1.0)
+    ]
+    symmetric = True if isinstance(graph, nx.Graph) else False
+    transition, diag, pi = utils.get_probabilities(
+        edges, n_n,
+        symmetric=symmetric,
+        return_transition=True)
+
+    pij = transition @ diag
+    pij = SparseMat(pij)
+    transition = SparseMat(transition)
+
+    p_pij = pij.project(i2p)
+    p_pi = np.zeros(n_p)
+    for (i, j), w in p_pij.items():
+        p_pi[i] += w
+    Hs = [utils.entropy(p_pi), utils.entropy(p_pij.data)]
+
+    for step in range(1, depth + 1):
+        pij = utils.kron(pij, transition)
+        p_pij = pij.project(i2p)
+        Hs.append(utils.entropy(p_pij.data))
+
+    entrogram = np.array(Hs)
+    entrogram = entrogram[1:] - entrogram[:-1]
+    Hks = Hs[-1] - Hs[-2]
+    return Hks , entrogram[:-1] - Hks
 
 
 def best_partition(
@@ -630,6 +677,7 @@ def best_partition(
     :returns: TODO
 
     """
+    print(kwargs)
 
     if kmax is None:
         kmax = graph.number_of_nodes()
@@ -700,4 +748,4 @@ def best_partition(
         if save_partials:
             np.savez_compressed(partials_flnm.format(pgraph.np), **best)
         print(pgraph._np, pgraph.print_partition())
-        print('     ', utils.value(pgraph))
+        print('     ', utils.value(pgraph, **kwargs))
