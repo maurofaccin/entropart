@@ -37,11 +37,6 @@ def get_probabilities(edges, node_num,
                       return_transition=False):
     """Compute p_ij and p_i at the steady state"""
 
-    if symmetric:
-        edges += [
-            (j, i, w) for i, j, w in edges
-        ]
-
     graph = edgelist2csr_sparse(edges, node_num)
     steadystate = graph.sum(0)
 
@@ -56,9 +51,7 @@ def get_probabilities(edges, node_num,
 
     diff = 1.0
     count = 0
-    print(steadystate)
     steadystate = np.array(steadystate).reshape(-1, 1) / steadystate.sum()
-    print(steadystate)
     while diff > 1e-10:
         old_ss = steadystate.copy()
         steadystate = transition @ steadystate

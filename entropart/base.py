@@ -18,6 +18,7 @@ class PGraph(object):
         """A graph with partition
 
         :graph: nx.[Di]Graph()
+        :compute_steady: bool
         :init_part: dict {node: part, ...}
 
         """
@@ -45,14 +46,6 @@ class PGraph(object):
                 format='coo'
             )
         else:
-            # jes = [
-            #     init_part[self._i2n[i]] for i in range(len(self._n2i))
-            # ]
-            # _part = sparse.coo_matrix(
-            #     (np.ones(nn), (np.arange(nn), jes)),
-            #     shape=(nn, len(np.unique(jes))),
-            #     dtype=float,
-            # )
             _part = utils.partition2coo_sparse(
                 {self._n2i[k]: v for k, v in init_part.items()}
             )
@@ -69,6 +62,7 @@ class PGraph(object):
         self._nn, self._np = _part.shape
 
         # compute the probabilities p(i, j) and p(i)
+        self.__st_computed = compute_steady
         if compute_steady:
             edges = [
                 (self._n2i[i], self._n2i[j], w)
@@ -97,7 +91,10 @@ class PGraph(object):
             for (i, j), w in pij.items():
                 pi[i] += w
                 ppi, ppj = self._i2p[i], self._i2p[j]
-                p_pij[(ppi, ppj)] = p_pij.get((ppi, ppj), 0.0) + w
+                if (ppi, ppj) in p_pij:
+                    p_pij[(ppi, ppj)] += w
+                else:
+                    p_pij[(ppi, ppj)] = w
 
             p_pi = np.zeros(self._np)
             for (i, j), w in p_pij.items():
@@ -117,6 +114,10 @@ class PGraph(object):
     @property
     def nn(self):
         return self._nn
+
+    @property
+    def st_computed(self):
+        return self.__st_computed
 
     def _get_random_move(self, inode=None):
         if inode is None:
@@ -523,7 +524,10 @@ class SparseMat(object):
         new_dok = {}
         for p, d in self._dok.items():
             new_indx = tuple([part[i] for i in p])
-            new_dok[new_indx] = new_dok.get(new_indx, 0.0) + d
+            if new_indx in new_dok:
+                new_dok[new_indx] += d
+            else:
+                new_dok[new_indx] = d
 
         # fix partition before returning
         if move_node is not None:
@@ -556,7 +560,10 @@ class SparseMat(object):
 
     def __iadd__(self, other):
         for p, d in other._dok.items():
-            self._dok[p] = self._dok.get(p, 0.0) + d
+            if p in self._dok:
+                self._dok[p] += d
+            else:
+                self._dok[p] = d
             for i in p:
                 self.__p_thr[i].add(p)
         return self
@@ -610,7 +617,10 @@ class SparseMat(object):
                     [i if i != indx2 else indx1 for i in path]
                 )
             path = tuple([i - int(i > indx2) for i in path])
-            new_dict[path] = new_dict.get(path, 0.0) + value
+            if path in new_dict:
+                new_dict[path] += value
+            else:
+                new_dict[path] = value
 
         new_mat = SparseMat(new_dict, node_num=self._nn - 1)
         return new_mat
@@ -631,11 +641,16 @@ def entrogram(graph, partition, depth=3):
     n_n = len(n2i)
     n_p = len(np.unique(list(i2p.values())))
 
+    symmetric = True if isinstance(graph, nx.Graph) else False
     edges = [
         (n2i[i], n2i[j], w)
         for i, j, w in graph.edges.data('weight', default=1.0)
     ]
-    symmetric = True if isinstance(graph, nx.Graph) else False
+    if symmetric:
+        edges += [
+            (j, i, w) for i, j, w in edges
+        ]
+
     transition, diag, pi = utils.get_probabilities(
         edges, n_n,
         symmetric=symmetric,
@@ -666,6 +681,7 @@ def best_partition(
         graph,
         kmin=2,
         kmax=None,
+        beta = 1,
         compute_steady=True,
         save_partials=False,
         partials_flnm='net_{:03}.npz',
@@ -677,7 +693,6 @@ def best_partition(
     :returns: TODO
 
     """
-    print(kwargs)
 
     if kmax is None:
         kmax = graph.number_of_nodes()
@@ -691,61 +706,76 @@ def best_partition(
         initp = {
             n: i % kmax for i, n in enumerate(graph.nodes())
         }
+
     pgraph = PGraph(graph, init_part=initp, compute_steady=compute_steady)
 
     # for k in range(kmax, max(kmin - 1, 1), -1):
-    firstime = True
+    results = {}
+    best = optimize(pgraph, beta, tsteps, **kwargs)
+    results[pgraph._np] = dict(best)
+    pgraph = PGraph(graph, init_part=best,
+                    compute_steady=compute_steady)
+    if save_partials:
+        np.savez_compressed(partials_flnm.format(pgraph.np), **best)
+    print(pgraph._np, pgraph.print_partition())
+    print('     ', utils.value(pgraph, **kwargs))
+
     while pgraph._np > kmin:
-        if firstime:
-            firstime = False
-        else:
-            p1, p2 = pgraph._get_best_merge()
-            pgraph.merge_partitions(p1, p2)
+        p1, p2 = pgraph._get_best_merge()
+        pgraph.merge_partitions(p1, p2)
 
-        best = {
-            "partition": pgraph.partition(),
-            "hs": (0.0, 0.0)
-        }
-        cumul = 0.0
-
-        # move nodes around
-        moves = [0, 0, 0]
-        for _ in range(tsteps):
-            r_node, r_part, p = pgraph._get_random_move()
-            delta = pgraph._try_move_node(
-                r_node,
-                r_part,
-                bruteforce=False,
-                **kwargs
-            )
-
-            if delta is None:
-                continue
-
-            if delta >= 0.0:
-                pgraph._move_node(r_node, r_part)
-                cumul += delta
-                moves[0] += 1
-            else:
-                rand = np.random.rand()
-                # print(np.exp(delta) * p)
-                if rand < np.exp(delta) * p / 100:
-                    pgraph._move_node(r_node, r_part)
-                    cumul += delta
-                    moves[1] += 1
-            if cumul > 0:
-                best = {
-                    "partition": pgraph.partition(),
-                    "hs": pgraph.entropies()
-                }
-                cumul = 0.0
-                moves[2] += 1
-        # print('good {}, not so good {}, best {}'.format(*moves))
-
-        # merge two communities
-        pgraph = PGraph(graph, init_part=best['partition'],
+        best = optimize(pgraph, beta, tsteps, **kwargs)
+        results[pgraph._np] = dict(best)
+        pgraph = PGraph(graph, init_part=best,
                         compute_steady=compute_steady)
         if save_partials:
-            np.savez_compressed(partials_flnm.format(pgraph.np), **best)
+            np.savez_compressed(
+                partials_flnm.format(pgraph.np),
+                partition= best,
+                **kwargs,
+            )
         print(pgraph._np, pgraph.print_partition())
         print('     ', utils.value(pgraph, **kwargs))
+    return (results)
+
+
+def optimize(pgraph, beta, tsteps, **kwargs):
+    best = {
+        "partition": pgraph.partition(),
+        "hs": (0.0, 0.0)
+    }
+    cumul = 0.0
+    moves = [0, 0, 0]
+    for _ in range(tsteps):
+        r_node, r_part, p = pgraph._get_random_move()
+        delta = pgraph._try_move_node(
+            r_node,
+            r_part,
+            bruteforce=False,
+            beta=beta,
+            **kwargs
+        )
+
+        if delta is None:
+            continue
+
+        if delta >= 0.0:
+            pgraph._move_node(r_node, r_part)
+            cumul += delta
+            moves[0] += 1
+        else:
+            rand = np.random.rand()
+            # print(np.exp(beta * delta) * p)
+            if rand < np.exp(beta * delta) * p:
+                pgraph._move_node(r_node, r_part)
+                cumul += delta
+                moves[1] += 1
+        if cumul > 0:
+            best = {
+                "partition": pgraph.partition(),
+                "hs": pgraph.entropies()
+            }
+            cumul = 0.0
+            moves[2] += 1
+    print('good {}, not so good {}, best {}'.format(*moves))
+    return best['partition']
