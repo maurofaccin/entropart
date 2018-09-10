@@ -715,10 +715,16 @@ def best_partition(
     results[pgraph._np] = dict(best)
     pgraph = PGraph(graph, init_part=best,
                     compute_steady=compute_steady)
+    val = utils.value(pgraph, **kwargs)
     if save_partials:
-        np.savez_compressed(partials_flnm.format(pgraph.np), **best)
+        np.savez_compressed(
+            partials_flnm.format(pgraph.np),
+            partition=best,
+            value=val,
+            **kwargs,
+        )
     print(pgraph._np, pgraph.print_partition())
-    print('     ', utils.value(pgraph, **kwargs))
+    print('     ', val)
 
     while pgraph._np > kmin:
         p1, p2 = pgraph._get_best_merge()
@@ -728,14 +734,16 @@ def best_partition(
         results[pgraph._np] = dict(best)
         pgraph = PGraph(graph, init_part=best,
                         compute_steady=compute_steady)
+        val = utils.value(pgraph, **kwargs)
         if save_partials:
             np.savez_compressed(
                 partials_flnm.format(pgraph.np),
-                partition= best,
+                partition=best,
+                value=val,
                 **kwargs,
             )
         print(pgraph._np, pgraph.print_partition())
-        print('     ', utils.value(pgraph, **kwargs))
+        print('     ', val)
     return (results)
 
 
