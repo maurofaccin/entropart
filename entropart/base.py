@@ -5,9 +5,13 @@ import numpy as np
 import networkx as nx
 from scipy import sparse
 from collections import Counter
+import logging
 from . import utils
 
-
+FORMAT = '%(asctime)-15s || %(message)s'
+logging.basicConfig(format=FORMAT)
+log = logging.getLogger("EntroLog")
+log.setLevel(logging.WARNING)
 SYMBOLS = '0123456789ABCDEFGHJKLMNOPQRSTUVWXYZabcdefghjklmnopqrstuvwxyz'
 
 
@@ -238,7 +242,6 @@ class PGraph(object):
 
     def _move_node(self, inode, partition):
         if self._i2p[inode] == partition:
-            print('already there')
             return None
         pnode = self._pi[inode]
         old_part = self._i2p[inode]
@@ -486,7 +489,7 @@ class SparseMat(object):
                     self.__p_thr[i].add(path)
                 except IndexError:
                     print(path, self._nn)
-                    exit()
+                    raise
 
     @property
     def data(self):
@@ -505,7 +508,7 @@ class SparseMat(object):
             yield k, v
 
     def checkme(self):
-        print('{} -- NN {}; NL {}'.format(
+        log.info('{} -- NN {}; NL {}'.format(
             self.__class__.__name__,
             self._nn,
             len(self._dok)
@@ -686,6 +689,7 @@ def best_partition(
         kmin=2,
         kmax=None,
         beta=1.0,
+        probNorm=1.0,
         compute_steady=True,
         save_partials=False,
         partials_flnm='net_{:03}.npz',
@@ -715,7 +719,7 @@ def best_partition(
 
     # for k in range(kmax, max(kmin - 1, 1), -1):
     results = {}
-    best = optimize(pgraph, beta, tsteps, **kwargs)
+    best = optimize(pgraph, beta, probNorm, tsteps, **kwargs)
     results[pgraph._np] = dict(best)
     pgraph = PGraph(graph, init_part=best,
                     compute_steady=compute_steady)
@@ -727,14 +731,14 @@ def best_partition(
             value=val,
             **kwargs,
         )
-    print(pgraph._np, pgraph.print_partition())
-    print('     ', val)
+    log.info('{} -- {} '.format(pgraph._np, pgraph.print_partition()))
+    log.info('   -- {}'.format(val))
 
     while pgraph._np > kmin:
         p1, p2 = pgraph._get_best_merge()
         pgraph.merge_partitions(p1, p2)
 
-        best = optimize(pgraph, beta, tsteps, **kwargs)
+        best = optimize(pgraph, beta, probNorm, tsteps, **kwargs)
         results[pgraph._np] = dict(best)
         pgraph = PGraph(graph, init_part=best,
                         compute_steady=compute_steady)
@@ -746,12 +750,12 @@ def best_partition(
                 value=val,
                 **kwargs,
             )
-        print(pgraph._np, pgraph.print_partition())
-        print('     ', val)
+        log.info('{} -- {} '.format(pgraph._np, pgraph.print_partition()))
+        log.info('   -- {}'.format(val))
     return (results)
 
 
-def optimize(pgraph, beta, tsteps, **kwargs):
+def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
     best = {
         "partition": pgraph.partition(),
         "hs": (0.0, 0.0)
@@ -777,8 +781,7 @@ def optimize(pgraph, beta, tsteps, **kwargs):
             moves[0] += 1
         else:
             rand = np.random.rand()
-            # print(np.exp(beta * delta) * p)
-            if rand < np.exp(beta * delta) * p:
+            if rand < np.exp(beta * delta) * p * probNorm:
                 pgraph._move_node(r_node, r_part)
                 cumul += delta
                 moves[1] += 1
@@ -789,5 +792,5 @@ def optimize(pgraph, beta, tsteps, **kwargs):
             }
             cumul = 0.0
             moves[2] += 1
-    print('good {}, not so good {}, best {}'.format(*moves))
+    log.info('good {}, not so good {}, best {}'.format(*moves))
     return best['partition']
