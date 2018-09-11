@@ -332,9 +332,13 @@ class PGraph(object):
 
     def print_partition(self):
         try:
-            return ''.join([SYMBOLS[self._i2p[i]] for i in range(self._nn)])
+            strng = ''.join([SYMBOLS[self._i2p[i]] for i in range(self._nn)])
         except IndexError:
             return 'Too many symbols!'
+        if len(strng) > 80:
+            return strng[:78] + '…'
+        else:
+            return strng
 
     def entropies(self):
         h1 = - np.sum(self._ppi * np.log2(self._ppi))
@@ -681,7 +685,7 @@ def best_partition(
         graph,
         kmin=2,
         kmax=None,
-        beta = 1,
+        beta=1.0,
         compute_steady=True,
         save_partials=False,
         partials_flnm='net_{:03}.npz',
