@@ -719,6 +719,8 @@ def best_partition(
 
     # for k in range(kmax, max(kmin - 1, 1), -1):
     results = {}
+    log.info("Optimization with {} parts, alpha {}, beta {}, probNorm {}"
+             .format(pgraph._np, kwargs.get('alpha', 0.0), beta, probNorm))
     best = optimize(pgraph, beta, probNorm, tsteps, **kwargs)
     results[pgraph._np] = dict(best)
     pgraph = PGraph(graph, init_part=best,
@@ -756,10 +758,7 @@ def best_partition(
 
 
 def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
-    best = {
-        "partition": pgraph.partition(),
-        "hs": (0.0, 0.0)
-    }
+    bestp = pgraph.partition()
     cumul = 0.0
     moves = [0, 0, 0]
     for _ in range(tsteps):
@@ -789,11 +788,8 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
                 cumul += delta
                 moves[1] += 1
         if cumul > 0:
-            best = {
-                "partition": pgraph.partition(),
-                "hs": pgraph.entropies()
-            }
+            bestp = pgraph.partition()
             cumul = 0.0
             moves[2] += 1
     log.info('good {}, not so good {}, best {}'.format(*moves))
-    return best['partition']
+    return bestp
