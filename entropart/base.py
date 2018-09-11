@@ -781,7 +781,10 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
             moves[0] += 1
         else:
             rand = np.random.rand()
-            if rand < np.exp(beta * delta) * p * probNorm:
+            threshold = np.exp(beta * delta) * p * probNorm
+            log.debug('delta {}, rand {}, threshold {}'.format(delta, rand,
+                                                               threshold))
+            if rand < threshold:
                 pgraph._move_node(r_node, r_part)
                 cumul += delta
                 moves[1] += 1
