@@ -10,21 +10,22 @@ def entropy(array):
     """Compute entropy."""
     # if array is a scalar
     if isinstance(array, (float, np.float32)):
-        if np.isclose(float(array), 0.0):
+        if float(array) == 0.0:
             return 0.0
         return - array * np.log2(array)
-    # if it is a vector
+
+    # if it is a vector or matrix
     try:
         # if it store plogp
-        return - np.sum([p.plogp for p in array])
+        return array.entropy()
     except AttributeError:
         # otherwise use numpy
         array = np.array(array)
         return - np.sum(array * np.log2(array))
 
 
-def delta(h1pre, h2pre, h1post, h2post, alpha=0.0, beta=1.0):
-    return (2 - alpha) * (h1post - h1pre) - h2post + h2pre
+def delta(h1old, h2old, h1new, h2new, alpha=0.0):
+    return (2 - alpha) * (h1new - h1old) - h2new + h2old
 
 
 def value(pgraph, alpha=0.0):
