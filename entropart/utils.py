@@ -97,7 +97,7 @@ def kron(A, B):
     dok = {}
     for n in range(A.shape[0]):
         for pA in A.paths_through_node(n, position=-1):
-            for pB in B.paths_through_node(n):
+            for pB in B.paths_through_node(n, position=0):
                 dok[tuple(list(pA) + list(pB))] = A[pA] * B[pB]
 
     return base.SparseMat(dok)

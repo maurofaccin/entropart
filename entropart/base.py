@@ -515,8 +515,10 @@ class SparseMat(object):
         elif normalize:
             vsum = np.sum([float(v) for v in self._dok.values()])
             self._norm = Prob(vsum)
-        else:
+        elif not normalize:
             self._norm = Prob(1.0)
+        else:
+            raise ValueError()
 
         if self._norm == 0.0:
             raise ValueError('This is a zero matrix')
@@ -562,12 +564,12 @@ class SparseMat(object):
             part[move_node[0]] = move_node[1]
 
         new_dok = {}
-        for p, d in self._dok.items():
-            new_indx = tuple([part[i] for i in p])
+        for path, val in self._dok.items():
+            new_indx = tuple(part[i] for i in path)
             if new_indx in new_dok:
-                new_dok[new_indx] += d
+                new_dok[new_indx] += val.copy()
             else:
-                new_dok[new_indx] = d
+                new_dok[new_indx] = val.copy()
 
         # fix partition before returning
         if move_node is not None:
@@ -581,7 +583,7 @@ class SparseMat(object):
 
     def copy(self):
         return SparseMat(
-            self._dok,
+            {path[:]: w.copy() for path, w in self._dok.items()},
             node_num=self._nn,
             normalize=self._norm,
         )
@@ -724,6 +726,25 @@ class SparseMat(object):
             normalize=self._norm,
         )
 
+    def kron(self, other):
+        dok = {}
+        for n in range(self._nn):
+            for pA in self.paths_through_node(n, position=-1):
+                for pB in other.paths_through_node(n, position=0):
+                    dok[pA[:-1] + pB] = self._dok[pA] * other._dok[pB]
+
+        return SparseMat(
+            dok,
+            node_num=self._nn,
+            normalize=self._norm * other._norm
+            # normalize=True
+        )
+
+    def sum(self):
+        return (
+            np.sum([float(p) for p in self._dok.values()]) / float(self._norm)
+        )
+
 
 def entrogram(graph, partition, depth=3):
     """TODO: Docstring for entrogram.
@@ -757,6 +778,7 @@ def entrogram(graph, partition, depth=3):
 
     pij = transition @ diag
     pij = SparseMat(pij, normalize=True)
+    # transition[i, j] = p(j| i)
     transition = SparseMat(transition)
 
     p_pij = pij.project(i2p)
@@ -766,14 +788,15 @@ def entrogram(graph, partition, depth=3):
     Hs = [utils.entropy(p_pi), utils.entropy(p_pij)]
 
     for step in range(1, depth + 1):
-        pij = utils.kron(pij, transition)
+        # pij = utils.kron(pij, transition)
+        pij = pij.kron(transition)
         p_pij = pij.project(i2p)
         Hs.append(utils.entropy(p_pij))
 
     entrogram = np.array(Hs)
     entrogram = entrogram[1:] - entrogram[:-1]
     Hks = Hs[-1] - Hs[-2]
-    return Hks , entrogram[:-1] - Hks
+    return Hks, entrogram[:-1] - Hks
 
 
 def best_partition(
