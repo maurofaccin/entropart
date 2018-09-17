@@ -809,7 +809,6 @@ def best_partition(
         save_partials=False,
         partials_flnm='net_{:03}.npz',
         tsteps=4000,
-        partname=None,
         **kwargs):
     """TODO: Docstring for best_partition.
 
@@ -875,7 +874,6 @@ def best_partition(
 
 def optimize(
         pgraph, beta, probNorm, tsteps,
-        partname=None,
         **kwargs
 ):
     bestp = pgraph.partition()
@@ -901,8 +899,6 @@ def optimize(
             continue
 
         if delta >= 0.0:
-            # log.info('good ' + partname[pgraph._i2p[r_node]] +
-            #          '=>' + partname[r_part])
             pgraph._move_node(r_node, r_part)
             cumul += delta
             moves[0] += 1
