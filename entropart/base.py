@@ -809,6 +809,7 @@ def best_partition(
         save_partials=False,
         partials_flnm='net_{:03}.npz',
         tsteps=4000,
+        return_obj=False,
         **kwargs):
     """TODO: Docstring for best_partition.
 
@@ -841,6 +842,9 @@ def best_partition(
     pgraph = PGraph(graph, init_part=best,
                     compute_steady=compute_steady)
     val = utils.value(pgraph, **kwargs)
+    if return_obj:
+        r_vals = {}
+        r_vals[pgraph._np] = val
     if save_partials:
         np.savez_compressed(
             partials_flnm.format(pgraph.np),
@@ -860,6 +864,8 @@ def best_partition(
         pgraph = PGraph(graph, init_part=best,
                         compute_steady=compute_steady)
         val = utils.value(pgraph, **kwargs)
+        if return_obj:
+            r_vals[pgraph._np] = val
         if save_partials:
             np.savez_compressed(
                 partials_flnm.format(pgraph.np),
@@ -869,7 +875,10 @@ def best_partition(
             )
         log.info('{} -- {} '.format(pgraph._np, pgraph.print_partition()))
         log.info('   -- {}'.format(val))
-    return (results)
+    if return_obj:
+        return (results), r_vals
+    else:
+        return (results)
 
 
 def optimize(
