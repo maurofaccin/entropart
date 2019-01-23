@@ -387,6 +387,8 @@ class PGraph(object):
 
 class Prob(object):
     """A class to store the probability p and the plogp value."""
+    __slots__ = ['__p', '__plogp']
+
     def __init__(self, value):
         """Given a float or a Prob, store p and plogp."""
         if float(value) < 0.0:
