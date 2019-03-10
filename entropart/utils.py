@@ -1,16 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 import numpy as np
 from scipy import sparse
 from entropart import base
+
+np.seterr(all='raise')
 
 
 def entropy(array):
     """Compute entropy."""
     # if array is a scalar
-    if isinstance(array, (float, np.float32)):
-        if float(array) == 0.0:
+    if isinstance(array, (float, np.float32, np.float64)):
+        if array <= 0.0:
             return 0.0
         return - array * np.log2(array)
 
@@ -21,6 +22,7 @@ def entropy(array):
     except AttributeError:
         # otherwise use numpy
         array = np.array(array)
+        array = array[array > 0]
         return - np.sum(array * np.log2(array))
 
 
@@ -86,11 +88,16 @@ def partition2coo_sparse(part):
     """from dict {(i, j, k, …): weight, …}"""
     n_n = len(part)
     n_p = len(np.unique(list(part.values())))
-    return sparse.coo_matrix(
-        (np.ones(n_n), (list(part.keys()), list(part.values()))),
-        shape=(n_n, n_p),
-        dtype=float,
-    )
+    try:
+        return sparse.coo_matrix(
+            (np.ones(n_n), (list(part.keys()), list(part.values()))),
+            shape=(n_n, n_p),
+            dtype=float,
+        )
+    except ValueError:
+        print(n_p)
+        print(n_n)
+        raise
 
 
 def kron(A, B):
@@ -101,3 +108,17 @@ def kron(A, B):
                 dok[tuple(list(pA) + list(pB))] = A[pA] * B[pB]
 
     return base.SparseMat(dok)
+
+
+def zeros(node_num):
+    return base.SparseMat({}, node_num=0, normalize=False)
+
+
+def zeros_like(sparsemat):
+    return base.SparseMat(
+        {},
+        node_num=sparsemat.nn,
+        normalize=1.0,
+        plength=sparsemat._dim
+    )
+

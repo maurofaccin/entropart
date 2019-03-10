@@ -25,7 +25,8 @@ SYMBOLS = '0123456789ABCDEFGHJKLMNOPQRSTUVWXYZabcdefghjklmnopqrstuvwxyz'
 class PGraph(object):
     """A Graph with partition."""
 
-    def __init__(self, graph, compute_steady=True, init_part=None):
+    def __init__(self, graph,
+                 compute_steady=True, init_part=None):
         """A graph with partition
 
         :graph: nx.[Di]Graph()
@@ -113,6 +114,13 @@ class PGraph(object):
         self._ppij = SparseMat(p_pij, normalize=True)
         self._ppi = p_pi / p_pi.sum()
 
+        print(self._pij.sum())
+        print(self._ppij.sum())
+        print(self._pi.sum())
+        print(self._ppi.sum())
+        assert np.isclose(self._pij.sum(), 1.0)
+        assert np.isclose(self._ppij.sum(), 1.0)
+
         self._reset()
 
     @property
@@ -127,53 +135,125 @@ class PGraph(object):
     def st_computed(self):
         return self.__st_computed
 
-    def _get_random_move(self, inode=None, algorithm='correl'):
+    def _move_probability(self, inode, part_probs=None, part=None):
+        """Compute the probability to move to a partition.
+
+        :inode: node index to move
+        :part_probs: optional prob distribution to compute from
+        :part: optional partition to move the node to
+        """
+
+        if part_probs is None:
+            part_probs = self._ppij
+        n_ego_out = self._pij.get_egonet(inode, axis=0).project(self._i2p)
+        n_ego_in = self._pij.get_egonet(inode, axis=1).project(self._i2p)
+
+        # compute probability to choose a partition to mode to
+        if part is None:
+            probs = np.zeros(part_probs.nn)
+            rng = range(part_probs.nn)
+        else:
+            probs = np.array([0.0, ])
+            rng = [part]
+
+        for prt in rng:
+
+            probs[prt] += np.sum([
+                float(v) * float(part_probs[(prt, p[1])])
+                for p, v in n_ego_out
+            ])
+
+            probs[prt] += np.sum([
+                float(v) * float(part_probs[(p[0], prt)])
+                for p, v in n_ego_in])
+
+        probs += 1.0 / (part_probs.nn + 1)
+        return probs / probs.sum()
+
+    def _get_random_move(self, inode=None, algorithm='correl', **kwargs):
+        """Select one node and a partition to move to.
+        Returns the probability of the move and the delta energy.
+        """
         if inode is None:
             inode = np.random.randint(self._nn)
         old_part = self._i2p[inode]
 
+        delta = 1.0 / (self._np + 1)
+
         if algorithm == 'random':
-            return inode, np.random.randint(self._np), 1.0
+            new_part = np.random.randint(self._np)
+            prob_ratio = 1.0
 
-        elif algorithm == 'peixoto':
-            n_ego = self._pij.get_egonet(inode)
-            n_ego = self._pij.get_egonet(inode, direction='out')
-            if n_ego is None:
-                return inode, old_part, 1.0
-            link, link_prob = n_ego.get_random_entry()
+            delta_obj = self._try_move_node(inode, new_part,
+                                            bruteforce=False, **kwargs)
 
-            # get all partitions connected to p1
-            # indx represents:
-            # 0: out link
-            # -1: in link
-            indx = 0
-            if link[0] == link[-1]:
-                # self loop
-                p1 = self._i2p[link[-1]]
-                p1_ego = self._ppij.get_egonet(p1)
-            elif link[0] == inode:
-                # outgoing link
-                p1 = self._i2p[link[-1]]
-                p1_ego = self._ppij.get_egonet(p1, direction='in')
+        elif algorithm == 'new':
+            n_ego_full = self._pij.get_egonet(inode)
+            n_ego = n_ego_full.project(self._i2p)
+            p1_ego = self._ppij.get_egonet(old_part)
+
+            if np.random.random() < delta:
+                # inode is going to start a new partition
+                n_ego.add_colrow()
+                p1_ego.add_colrow()
+                p2_ego = utils.zeros_like(p1_ego)
+
+                new_part = self._np
+
+                prob_move = delta
             else:
-                # incoming link
-                p1 = self._i2p[link[0]]
-                p1_ego = self._ppij.get_egonet(p1, direction='out')
-                indx = -1
-            if p1_ego is None:
-                return inode, old_part, 1.0
+                # move inode to anothere partition
+                probs_go = self._move_probability(inode)
+                new_part = np.random.choice(
+                    np.arange(self._np),
+                    p=probs_go
+                )
+                p2_ego = self._ppij.get_egonet(new_part)
 
-            link, p_prob, probs = p1_ego.get_random_entry(return_all_probs=True)
+                prob_move = probs_go[new_part]
+            if (inode, new_part) in self._tryed_moves:
+                return (inode,
+                        new_part,
+                        self._tryed_moves[(inode, new_part)][0],
+                        self._tryed_moves[(inode, new_part)][1])
 
-            R_t = self._np * np.min(probs) / (self._np * np.min(probs) + 1.0)
-            if np.random.rand() < R_t:
-                return inode, np.random.randint(self._np), 1 / self._np
+            n_ego_post = n_ego_full.project(
+                self._i2p,
+                move_node=(inode, new_part)
+            )
 
-            return inode, link[indx], p_prob / (p_prob + link_prob)
+            p12_post = (p1_ego | p2_ego) + n_ego_post - n_ego
+            probs_back = self._move_probability(
+                inode,
+                part_probs=p12_post
+            )
 
-        else:
+            prob_ratio = probs_back[old_part] / prob_move
 
-            n_ego = self._pij.get_egonet(inode, direction='out')
+            if new_part == self._np:
+                h1org = utils.entropy(self._ppi[old_part])
+                h1dst = utils.entropy([
+                    self._ppi[old_part] - self._pi[inode],
+                    self._pi[inode]
+                ])
+            else:
+                h1org = utils.entropy([
+                    self._ppi[old_part],
+                    self._ppi[new_part]
+                ])
+                h1dst = utils.entropy([
+                    self._ppi[old_part] - self._pi[inode],
+                    self._ppi[new_part] + self._pi[inode]
+                ])
+
+            H2org = utils.entropy(p1_ego | p2_ego)
+            H2dst = utils.entropy(p12_post)
+
+            delta_obj = utils.delta(h1org, H2org, h1dst, H2dst, **kwargs)
+            self._tryed_moves[(inode, new_part)] = (prob_ratio, delta_obj)
+
+        elif algorithm == 'correl':
+            n_ego = self._pij.get_egonet(inode, axis=0)
             if n_ego is None:
                 return inode, old_part, 1.0
             # prob of getting out of inode and arriving to any partition.
@@ -182,38 +262,20 @@ class PGraph(object):
                 n2p_arr[self._i2p[i[-1]]] += v
 
             probs = self._ppij.dot(n2p_arr, indx=-1)
-            probs /= probs.sum()
+            if probs.sum() > 0:
+                probs /= probs.sum()
+            else:
+                probs = np.ones_like(probs) / len(probs)
 
             new_part = np.random.choice(np.arange(self._np), p=probs)
-            return inode, new_part, probs[old_part] / probs[new_part]
+            prob_ratio = probs[old_part] / probs[new_part]
 
-    def _get_best_merge(self, **kwargs):
-        best = {
-            'parts': (None, None),
-            'delta': -np.inf
-        }
-        for p1 in range(self._np):
-            for p2 in range(p1 + 1, self._np):
-                d = self._try_merge(p1, p2, **kwargs)
-                if d > best['delta']:
-                    best = {
-                        'parts': (p1, p2),
-                        'delta': d
-                    }
-        return best['parts']
+            delta_obj = self._try_move_node(inode, new_part,
+                                            bruteforce=False, **kwargs)
+        else:
+            raise NotImplementedError('Algorithm not known ' + algorithm)
 
-    def _try_merge(self, p1, p2, **kwargs):
-        p1_ego = self._ppij.get_egonet(p1)
-        p2_ego = self._ppij.get_egonet(p2)
-        p12 = p1_ego | p2_ego
-        H2pre = utils.entropy(p12)
-
-        p12 = p12.merge_colrow(p1, p2)
-        H2post = utils.entropy(p12)
-
-        h1pre = utils.entropy(self._ppi[p1]) + utils.entropy(self._ppi[p2])
-        h1post = utils.entropy(self._ppi[p1] + self._ppi[p2])
-        return utils.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+        return inode, new_part, prob_ratio, delta_obj
 
     def _try_move_node(self, inode, partition, bruteforce=False, **kwargs):
         """deltaH"""
@@ -222,14 +284,14 @@ class PGraph(object):
             return self._tryed_moves[(inode, partition)]
 
         # check if we are moving to the same partition
-        if self._i2p[inode] == partition:
+        old_part = self._i2p[inode]
+        if old_part == partition:
             return None
 
         # check if starting partition has just one node
-        if len(self._p2i[self._i2p[inode]]) == 1:
+        if len(self._p2i[old_part]) == 0:
             return None
 
-        old_part = self._i2p[inode]
         if bruteforce:
             self._move_node(inode, partition)
             fnew = utils.value(self, **kwargs)
@@ -249,25 +311,11 @@ class PGraph(object):
         part_dest = part_orig + proj_ego_dst
         part_dest -= proj_ego_org
 
-        # part_ego_org = self._ppij.get_from_sparse(
-        #     proj_ego_org | proj_ego_dst
-        # )
-
-        # partition ego-nets (destination)
-        # part_ego_dst = part_ego_org.copy()
-        # part_ego_dst += proj_ego_dst
-        # part_ego_dst -= proj_ego_org
-
         h1org = utils.entropy(self._ppi[old_part]) +\
             utils.entropy(self._ppi[partition])
-        # if self._pi[inode] > self._ppi[old_part]:
-        #     raise ValueError('noooo {} - {}'.format(self._ppi[old_part],
-        #                                             self._pi[inode]))
         h1dst = utils.entropy(self._ppi[old_part] - self._pi[inode]) +\
             utils.entropy(self._ppi[partition] + self._pi[inode])
 
-        # H2org = utils.entropy(part_ego_org)
-        # H2dst = utils.entropy(part_ego_dst)
         H2org = utils.entropy(part_orig)
         H2dst = utils.entropy(part_dest)
 
@@ -278,8 +326,15 @@ class PGraph(object):
     def _move_node(self, inode, partition):
         if self._i2p[inode] == partition:
             return None
-        pnode = self._pi[inode]
+
         old_part = self._i2p[inode]
+        if len(self._p2i[old_part]) == 1:
+            self.merge_partitions(partition, old_part)
+            return
+
+        assert np.isclose(self._pij.sum(), 1.0)
+        assert np.isclose(self._ppij.sum(), 1.0)
+        pnode = self._pi[inode]
         self._ppi[old_part] -= pnode
         self._ppi[partition] += pnode
 
@@ -294,7 +349,96 @@ class PGraph(object):
         self._p2i[old_part].remove(inode)
         self._p2i[partition].add(inode)
 
+        assert np.isclose(self._pij.sum(), 1.0)
+        assert np.isclose(self._ppij.sum(), 1.0)
         self._reset()
+
+    def _get_best_merge(self, **kwargs):
+        best = {
+            'parts': (None, None),
+            'delta': -np.inf
+        }
+        for p1 in range(self._np):
+            for p2 in range(p1 + 1, self._np):
+                d = self._try_merge(p1, p2, **kwargs)
+                if d > best['delta']:
+                    best = {
+                        'parts': (p1, p2),
+                        'delta': d
+                    }
+        return best['parts']
+
+    def _try_merge(self, p1, p2, **kwargs):
+        p1_ego = self._ppij.get_egonet(p1)
+        p2_ego = self._ppij.get_egonet(p2)
+        # union
+        p12 = p1_ego | p2_ego
+        H2pre = utils.entropy(p12)
+
+        p12 = p12.merge_colrow(p1, p2)
+        H2post = utils.entropy(p12)
+
+        h1pre = utils.entropy(self._ppi[p1]) + utils.entropy(self._ppi[p2])
+        h1post = utils.entropy(self._ppi[p1] + self._ppi[p2])
+        return utils.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+
+    def _try_split(self, inode, **kwargs):
+        # before splitting
+        old_part = self._i2p[inode]
+        if len(self._p2i[old_part]) <= 1:
+            return None
+
+        h1pre = utils.entropy(self._ppi[old_part])
+
+        part_ego = self._ppij.get_egonet(old_part)
+        H2pre = utils.entropy(part_ego)
+
+        # after splitting
+        h1post = utils.entropy(self._ppi[old_part] - self._pi[inode]) +\
+            utils.entropy(self._pi[inode])
+        # node ego nets (projected to partitions)
+        new_part = part_ego.add_colrow()
+        new_i2p = self._i2p.copy()
+        new_i2p[inode] = new_part
+
+        ego_node = self._pij.get_egonet(inode)\
+            .project(new_i2p, move_node=(inode, new_part))
+        part_ego_post = part_ego - ego_node
+        H2post = utils.entropy(ego_node) + utils.entropy(part_ego_post)
+
+        return utils.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+
+    def _split(self, inode):
+        old_part = self._i2p[inode]
+        if len(self._p2i[old_part]) == 1:
+            return
+
+        assert np.isclose(self._pij.sum(), 1.0)
+        assert np.isclose(self._ppij.sum(), 1.0)
+        # self._ppi
+        self._ppi = np.append(self._ppi, [0])
+        self._ppi[old_part] -= self._pi[inode]
+        self._ppi[-1] = self._pi[inode]
+
+        # self.__ppij
+        new_part = self._ppij.add_colrow()
+
+        ego_node = self._pij.get_egonet(inode)
+        en_pre = ego_node.project(self._i2p)
+        # self._i2p
+        self._i2p[inode] = new_part
+        en_post = ego_node.project(self._i2p)
+        self._ppij += en_post - en_pre
+
+        # self._p2i
+        self._p2i[old_part].remove(inode)
+        self._p2i[len(self._ppi) - 1] = set([inode])
+
+        # final updates
+        self._np += 1
+        self._reset()
+        assert np.isclose(self._pij.sum(), 1.0)
+        assert np.isclose(self._ppij.sum(), 1.0)
 
     def _project_dict(self, dcts, move_node=None):
         """Get the projected column and row of a given node.
@@ -391,8 +535,8 @@ class Prob(object):
 
     def __init__(self, value):
         """Given a float or a Prob, store p and plogp."""
-        if float(value) < 0.0:
-            raise ValueError('Must be non-negative.')
+        # if float(value) < 0.0:
+        #     raise ValueError('Must be non-negative.')
         self.__p = float(value)
         if isinstance(value, Prob):
             self.__plogp = value.plogp
@@ -481,12 +625,17 @@ class Prob(object):
 class SparseMat(object):
     """A sparse matrix with column and row slicing capabilities"""
 
-    def __init__(self, mat, node_num=None, normalize=False):
+    __slots__ = ['_dok', '_nn', '_dim', '_norm', '__p_thr']
+
+    def __init__(self, mat, node_num=None, normalize=False, plength=None):
         """Initiate the matrix
 
         :mat: scipy sparse matrix or
                 list of ((i, j, ...), w) or
                 dict (i, j, ...): w
+        :node_num: number of nodes
+        :normalize: (bool) whether to normalize entries or not
+        :plenght: lenght of each path, to use only if len(mat) == 0
         """
         if isinstance(mat, sparse.spmatrix):
             mat = sparse.coo_matrix(mat)
@@ -497,16 +646,19 @@ class SparseMat(object):
                 self._nn = mat.shape[0]
             self._dim = 2
         elif isinstance(mat, dict):
-            self._dok = {k: Prob(v) for k, v in mat.items()}
+            self._dok = {tuple(k): Prob(v) for k, v in mat.items()}
             if node_num is None:
                 self._nn = np.max([dd for d in self._dok for dd in d]) + 1
             # get the first key of the dict
-            val = next(iter(self._dok.keys()))
-            self._dim = len(val)
+            if plength is None:
+                val = next(iter(self._dok.keys()))
+                self._dim = len(val)
+            else:
+                self._dim = plength
         else:
-            self._dok = {i: Prob(d) for i, d in mat}
+            self._dok = {tuple(i): Prob(d) for i, d in mat}
             if node_num is None:
-                self._nn = np.max([dd for d in self._dok for dd in d])
+                self._nn = np.max([dd for d in self._dok for dd in d]) + 1
             self._dim = len(mat[0][0])
 
         if node_num is not None:
@@ -522,14 +674,14 @@ class SparseMat(object):
         else:
             raise ValueError()
 
-        if self._norm == 0.0:
+        if self._norm == 0.0 and len(self._dok) > 0:
             raise ValueError('This is a zero matrix')
 
         self.__update_all_paths()
         # self.checkme()
 
     def __update_all_paths(self):
-        # for each node, all paths that go through it
+        """ For each node, all paths that go through it."""
         self.__p_thr = [set() for _ in range(self._nn)]
         for path in self._dok.keys():
             for i in path:
@@ -540,12 +692,18 @@ class SparseMat(object):
                     raise
 
     def entropy(self):
+        if self._nn == 0:
+            return 0.0
         sum_plogp = np.sum([p.plogp for p in self._dok.values()])
         return (self._norm.plogp - sum_plogp) / self._norm.p
 
     @property
     def shape(self):
         return tuple([self._nn] * self._dim)
+
+    @property
+    def nn(self):
+        return self._nn
 
     def checkme(self):
         log.info('{} -- NN {}; NL {}'.format(
@@ -573,13 +731,18 @@ class SparseMat(object):
             else:
                 new_dok[new_indx] = val.copy()
 
+        new_n_part = max(list(part.values())) + 1
+
         # fix partition before returning
         if move_node is not None:
             part[move_node[0]] = old_part
 
+        # print(new_dok)
+        # print(max(list(part.values())) + 1)
+        # print(part)
         return SparseMat(
             new_dok,
-            node_num=max(list(part.values())) + 1,
+            node_num=new_n_part,
             normalize=self._norm,
         )
 
@@ -588,6 +751,7 @@ class SparseMat(object):
             {path[:]: w.copy() for path, w in self._dok.items()},
             node_num=self._nn,
             normalize=self._norm,
+            plength=self._dim,
         )
 
     def dot(self, other, indx):
@@ -599,17 +763,16 @@ class SparseMat(object):
             out[path[indx]] += float(w) * other[path[1 + indx]]
         return out / self._norm.p
 
-    def get_egonet(self, node, direction='both'):
+    def get_egonet(self, inode, axis=None):
         """Return the adjacency matrix of the ego net of node node."""
-        if direction == 'both':
-            slist = [(p, self._dok[p]) for p in self.__p_thr[node]]
-        elif direction == 'out':
+        if axis is None:
             slist = [
-                (p, self._dok[p]) for p in self.__p_thr[node] if p[0] == node
+                (p, self._dok[p]) for p in self.__p_thr[inode]
             ]
-        elif direction == 'in':
+        else:
             slist = [
-                (p, self._dok[p]) for p in self.__p_thr[node] if p[-1] == node
+                (p, self._dok[p]) for p in self.__p_thr[inode]
+                if p[axis] == inode
             ]
         if len(slist) < 1:
             return None
@@ -619,14 +782,26 @@ class SparseMat(object):
             normalize=self._norm,
         )
 
+    def slice(self, axis=0, n=0):
+        if axis == 0:
+            vec = [self._dok.get((n, nn), 0.0) for nn in range(self._nn)]
+        else:
+            vec = [self._dok.get((nn, n), 0.0) for nn in range(self._nn)]
+        return np.array(vec)
+
     def get_submat(self, nodelist):
         nodelist = set(nodelist)
         plist = [p for p in self._dok if any(n in p for n in nodelist)]
-        return SparseMat(
-            {p: self._dok[p] for p in plist},
-            node_num=self._nn,
-            normalize=self._norm,
-        )
+        try:
+            sm = SparseMat(
+                {p: self._dok[p] for p in plist},
+                node_num=self._nn,
+                normalize=self._norm,
+            )
+        except StopIteration:
+            print(nodelist)
+            raise
+        return sm
 
     def get_random_entry(self, return_all_probs=False):
         probs = np.array([float(n) for n in self._dok.values()])
@@ -647,8 +822,19 @@ class SparseMat(object):
         for k, v in self._dok.items():
             yield k, v / self._norm
 
+    def paths(self, axis=None, node=None):
+        if axis is None or node is None:
+            return self.__iter__()
+
+        for p, v in self._dok.items():
+            if p[axis] == node:
+                yield p, v / self._norm
+
     def __getitem__(self, item):
-        return self._dok[item] / self._norm
+        try:
+            return self._dok[item] / self._norm
+        except KeyError:
+            return 0.0
 
     def __iadd__(self, other):
         ratio = self._norm / other._norm
@@ -671,13 +857,13 @@ class SparseMat(object):
         """Can provide negative values."""
         for p, d in other._dok.items():
             d_norm = d * ratio
-            if np.isclose(float(self._dok[p]), float(d_norm)):
+            if np.isclose(float(self._dok.get(p, 0.0)), float(d_norm)):
                 for i in p:
                     self.__p_thr[i].discard(p)
                 del self._dok[p]
             else:
                 # no need to update __p_thr
-                self._dok[p] -= d_norm
+                self._dok[p] = self._dok.get(p, Prob(0.0)) - d_norm
         return self
 
     def __sub__(self, other):
@@ -685,12 +871,40 @@ class SparseMat(object):
         new -= other
         return new
 
+    def __imul__(self, other):
+        if self._nn != other._nn:
+            raise ValueError(
+                'Impossible to multiply matrices of different sizes {} and {}'
+                .format(self._nn, other._nn)
+            )
+        self._norm *= other._norm
+        if self.size() < other.size():
+            keys = [k for k in self._dok.keys() if k in other._dok]
+        else:
+            keys = [k for k in other._dok.keys() if k in self._dok]
+        new_dok = {k: other._dok[k] * self._dok[k] for k in keys}
+
+        self._dok = new_dok
+
+        # TODO: check if there is a better way to update paths
+        self.__update_all_paths()
+        return self
+
+    def __mul__(self, other):
+        new = self.copy()
+        new *= other
+        return new
+
     def set_path(self, path, weight):
+        """ Overwrite path weight. """
         self._dok[path] = Prob(weight) * self._norm
         for i in path:
             self.__p_thr[i].add(path)
 
     def __or__(self, other):
+        """ Return a SparseMat with entries from both self and other.
+        Local entries will be overwritten by other's.
+        """
         new = self.copy()
         for p, v in other:
             new.set_path(p, v)
@@ -709,6 +923,11 @@ class SparseMat(object):
             node_num=self._nn,
             normalize=normalize
         )
+
+    def add_colrow(self):
+        self._nn += 1
+        self.__p_thr.append(set())
+        return self._nn - 1
 
     def merge_colrow(self, indx1, indx2):
         indx1, indx2 = sorted([indx1, indx2])
@@ -742,7 +961,15 @@ class SparseMat(object):
             # normalize=True
         )
 
-    def sum(self):
+    def sum(self, axis=None):
+        # return the sum of all entries
+        if axis is not None:
+            probs = np.zeros(self._nn)
+            for p, v in self._dok.items():
+                probs[p[axis]] += float(v)
+            return probs / float(self._norm)
+        if self._nn == 0:
+            return 0.0
         return (
             np.sum([float(p) for p in self._dok.values()]) / float(self._norm)
         )
@@ -803,7 +1030,6 @@ def entrogram(graph, partition, depth=3):
 
 def best_partition(
         graph,
-        kmin=2,
         kmax=None,
         beta=1.0,
         probNorm=1.0,
@@ -833,16 +1059,13 @@ def best_partition(
             n: i % kmax for i, n in enumerate(graph.nodes())
         }
 
-    pgraph = PGraph(graph, init_part=initp, compute_steady=compute_steady)
+    pgraph = PGraph(graph, compute_steady=compute_steady, init_part=initp)
 
-    # for k in range(kmax, max(kmin - 1, 1), -1):
-    results = {}
     log.info("Optimization with {} parts, alpha {}, beta {}, probNorm {}"
              .format(pgraph._np, kwargs.get('alpha', 0.0), beta, probNorm))
     best = optimize(pgraph, beta, probNorm, tsteps, **kwargs)
-    results[pgraph._np] = dict(best)
-    pgraph = PGraph(graph, init_part=best,
-                    compute_steady=compute_steady)
+
+    results = dict(best)
     val = utils.value(pgraph, **kwargs)
     if return_obj:
         r_vals = {}
@@ -854,39 +1077,19 @@ def best_partition(
             value=val,
             **kwargs,
         )
+
+    pgraph = PGraph(graph, compute_steady=compute_steady, init_part=results)
+    log.info('final: num part {}'.format(pgraph.np))
     log.info('{} -- {} '.format(pgraph._np, pgraph.print_partition()))
     log.info('   -- {}'.format(val))
 
-    while pgraph._np > kmin:
-        p1, p2 = pgraph._get_best_merge()
-        pgraph.merge_partitions(p1, p2)
-
-        best = optimize(pgraph, beta, probNorm, tsteps, **kwargs)
-        results[pgraph._np] = dict(best)
-        pgraph = PGraph(graph, init_part=best,
-                        compute_steady=compute_steady)
-        val = utils.value(pgraph, **kwargs)
-        if return_obj:
-            r_vals[pgraph._np] = val
-        if save_partials:
-            np.savez_compressed(
-                partials_flnm.format(pgraph.np),
-                partition=best,
-                value=val,
-                **kwargs,
-            )
-        log.info('{} -- {} '.format(pgraph._np, pgraph.print_partition()))
-        log.info('   -- {}'.format(val))
     if return_obj:
-        return (results), r_vals
+        return results, r_vals
     else:
-        return (results)
+        return results
 
 
-def optimize(
-        pgraph, beta, probNorm, tsteps,
-        **kwargs
-):
+def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
     bestp = pgraph.partition()
     cumul = 0.0
     moves = [0, 0, 0]
@@ -895,22 +1098,21 @@ def optimize(
     else:
         tsrange = range(tsteps)
     for _ in tsrange:
-        r_node, r_part, p = pgraph._get_random_move(algorithm='correl')
-        delta = pgraph._try_move_node(
-            r_node,
-            r_part,
-            bruteforce=False,
+        r_node, r_part, p, delta = pgraph._get_random_move(
+            algorithm='new',
             **kwargs
         )
-        log.debug(
-            '         {}[{}] -> {}'.format(r_node, pgraph._i2p[r_node],
-                                           r_part))
+        log.debug('         {}[{}] -> {}'
+                  .format(r_node, pgraph._i2p[r_node], r_part))
 
         if delta is None:
             continue
 
         if delta >= 0.0:
-            pgraph._move_node(r_node, r_part)
+            if r_part == pgraph.np:
+                pgraph._split(r_node)
+            else:
+                pgraph._move_node(r_node, r_part)
             cumul += delta
             moves[0] += 1
         else:
@@ -919,7 +1121,10 @@ def optimize(
             log.debug('delta {:6f}, rand {:6f}, threshold {:6f}, p {:6f}'
                       .format(delta, rand, threshold, p))
             if rand < threshold:
-                pgraph._move_node(r_node, r_part)
+                if r_part == pgraph.np:
+                    pgraph._split(r_node)
+                else:
+                    pgraph._move_node(r_node, r_part)
                 cumul += delta
                 moves[1] += 1
         if cumul > 0:
@@ -928,3 +1133,4 @@ def optimize(
             moves[2] += 1
     log.info('good {}, not so good {}, best {}'.format(*moves))
     return bestp
+
