@@ -114,10 +114,6 @@ class PGraph(object):
         self._ppij = SparseMat(p_pij, normalize=True)
         self._ppi = p_pi / p_pi.sum()
 
-        print(self._pij.sum())
-        print(self._ppij.sum())
-        print(self._pi.sum())
-        print(self._ppi.sum())
         assert np.isclose(self._pij.sum(), 1.0)
         assert np.isclose(self._ppij.sum(), 1.0)
 
@@ -332,8 +328,6 @@ class PGraph(object):
             self.merge_partitions(partition, old_part)
             return
 
-        assert np.isclose(self._pij.sum(), 1.0)
-        assert np.isclose(self._ppij.sum(), 1.0)
         pnode = self._pi[inode]
         self._ppi[old_part] -= pnode
         self._ppi[partition] += pnode
@@ -349,8 +343,6 @@ class PGraph(object):
         self._p2i[old_part].remove(inode)
         self._p2i[partition].add(inode)
 
-        assert np.isclose(self._pij.sum(), 1.0)
-        assert np.isclose(self._ppij.sum(), 1.0)
         self._reset()
 
     def _get_best_merge(self, **kwargs):
@@ -410,11 +402,10 @@ class PGraph(object):
 
     def _split(self, inode):
         old_part = self._i2p[inode]
+        log.debug('Splitting node {}'.format(inode))
         if len(self._p2i[old_part]) == 1:
             return
 
-        assert np.isclose(self._pij.sum(), 1.0)
-        assert np.isclose(self._ppij.sum(), 1.0)
         # self._ppi
         self._ppi = np.append(self._ppi, [0])
         self._ppi[old_part] -= self._pi[inode]
@@ -437,8 +428,6 @@ class PGraph(object):
         # final updates
         self._np += 1
         self._reset()
-        assert np.isclose(self._pij.sum(), 1.0)
-        assert np.isclose(self._ppij.sum(), 1.0)
 
     def _project_dict(self, dcts, move_node=None):
         """Get the projected column and row of a given node.
@@ -466,6 +455,7 @@ class PGraph(object):
         return out
 
     def merge_partitions(self, part1, part2):
+        log.debug('Merging partitions {} and {}.'.format(part1, part2))
         part1, part2 = sorted([part1, part2])
 
         # self._ppi
@@ -1102,8 +1092,6 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
             algorithm='new',
             **kwargs
         )
-        log.debug('         {}[{}] -> {}'
-                  .format(r_node, pgraph._i2p[r_node], r_part))
 
         if delta is None:
             continue
@@ -1118,8 +1106,6 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
         else:
             rand = np.random.rand()
             threshold = np.exp(beta * delta) * p * probNorm
-            log.debug('delta {:6f}, rand {:6f}, threshold {:6f}, p {:6f}'
-                      .format(delta, rand, threshold, p))
             if rand < threshold:
                 if r_part == pgraph.np:
                     pgraph._split(r_node)
