@@ -1149,10 +1149,15 @@ def optimize(
             cumul += delta
             moves[0] += 1
             log.debug('accepted move')
+            if 'tqdm' in sys.modules and log.level >= 20:
+                tsrange.set_description('{} [{}]'.format(moves[2],
+                                                         pgraph.np))
         else:
             rand = np.random.rand()
-            threshold = np.exp(beta * delta) * p
-            if rand < threshold:
+            if rand == 0.0:
+                continue
+            threshold = beta * delta + np.log(p)
+            if np.log(rand) < threshold:
                 if r_part == pgraph.np:
                     pgraph._split(r_node)
                 else:
@@ -1160,6 +1165,9 @@ def optimize(
                 cumul += delta
                 moves[1] += 1
                 log.debug('accepted move {} < {}'.format(rand, threshold))
+                if 'tqdm' in sys.modules and log.level >= 20:
+                    tsrange.set_description('{} [{}]'.format(moves[2],
+                                                             pgraph.np))
             else:
                 log.debug('rejected move')
                 pass
