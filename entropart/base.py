@@ -1093,6 +1093,10 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
             **kwargs
         )
 
+        log.debug('proposed move: n {:5}, p {:5}, p() {:5.3f}, d {}'
+                  .format(r_node, r_part, p, delta))
+
+        log.debug('CUMUL {}'.format(cumul))
         if delta is None:
             continue
 
@@ -1103,6 +1107,7 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
                 pgraph._move_node(r_node, r_part)
             cumul += delta
             moves[0] += 1
+            log.debug('accepted move')
         else:
             rand = np.random.rand()
             threshold = np.exp(beta * delta) * p * probNorm
@@ -1113,7 +1118,13 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
                     pgraph._move_node(r_node, r_part)
                 cumul += delta
                 moves[1] += 1
+                log.debug('accepted move {} < {}'.format(rand, threshold))
+            else:
+                log.debug('rejected move')
+                pass
+
         if cumul > 0:
+            log.debug('BEST move +++ {} +++'.format(cumul))
             bestp = pgraph.partition()
             cumul = 0.0
             moves[2] += 1
