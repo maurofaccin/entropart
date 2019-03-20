@@ -166,7 +166,13 @@ class PGraph(object):
         probs += 1.0 / (part_probs.nn + 1)
         return probs / probs.sum()
 
-    def _get_random_move(self, inode=None, algorithm='correl', **kwargs):
+    def _get_random_move(
+            self,
+            inode=None,
+            algorithm='correl',
+            kmax=None,
+            kmin=None,
+            **kwargs):
         """Select one node and a partition to move to.
         Returns the probability of the move and the delta energy.
         """
@@ -174,14 +180,25 @@ class PGraph(object):
             inode = np.random.randint(self._nn)
         old_part = self._i2p[inode]
 
-        delta = 1.0 / (self._np + 1)
+        if kmax is not None and self._np == kmax:
+            # do not go for a new partition
+            delta = 0.0
+        else:
+            delta = 1.0 / (self._np + 1)
+
+        if kmin is not None:
+            if len(self._p2i[old_part]) == 1 and self._np == kmin:
+                return inode, None, None, None
 
         if algorithm == 'random':
             new_part = np.random.randint(self._np)
             prob_ratio = 1.0
-
-            delta_obj = self._try_move_node(inode, new_part,
-                                            bruteforce=False, **kwargs)
+            delta_obj = self._try_move_node(
+                inode,
+                new_part,
+                bruteforce=False,
+                **kwargs
+            )
 
         elif algorithm == 'new':
             n_ego_full = self._pij.get_egonet(inode)
@@ -205,8 +222,8 @@ class PGraph(object):
                     p=probs_go
                 )
                 p2_ego = self._ppij.get_egonet(new_part)
-
                 prob_move = probs_go[new_part]
+
             if (inode, new_part) in self._tryed_moves:
                 return (inode,
                         new_part,
@@ -1020,14 +1037,13 @@ def entrogram(graph, partition, depth=3):
 
 def best_partition(
         graph,
+        init_part=None,
+        kmin=None,
         kmax=None,
         beta=1.0,
-        probNorm=1.0,
         compute_steady=True,
-        save_partials=False,
-        partials_flnm='net_{:03}.npz',
+        partials=None,
         tsteps=4000,
-        return_obj=False,
         **kwargs):
     """TODO: Docstring for best_partition.
 
@@ -1038,31 +1054,48 @@ def best_partition(
 
     if kmax is None:
         kmax = graph.number_of_nodes()
-        initp = {
-            n: i for i, n in enumerate(graph.nodes())
-        }
-    elif isinstance(kmax, dict):
-        initp = kmax
-        kmax = len(np.unique(list(initp.values())))
+
+    if kmin is None:
+        kmin = 2
+
+    if init_part is None:
+        if kmax < graph.number_of_nodes():
+            # start from a random partition with partitions in [kmin, kmax]
+            k = int((kmax + kmin) / 2)
+            part = [i % k for i in range(graph.number_of_nodes())]
+            initp = {
+                n: i for i, n in zip(np.random.shuffle(part), graph.nodes())
+            }
+        else:
+            # start from N partitions
+            initp = {
+                n: i for i, n in enumerate(graph.nodes())
+            }
+    elif isinstance(init_part, dict):
+        initp = init_part
     else:
-        initp = {
-            n: i % kmax for i, n in enumerate(graph.nodes())
-        }
+        raise ValueError('init_part should be a dict not {}'
+                         .format(type(init_part)))
 
     pgraph = PGraph(graph, compute_steady=compute_steady, init_part=initp)
 
-    log.info("Optimization with {} parts, alpha {}, beta {}, probNorm {}"
-             .format(pgraph._np, kwargs.get('alpha', 0.0), beta, probNorm))
-    best = optimize(pgraph, beta, probNorm, tsteps, **kwargs)
+    log.info("Optimization with {} parts, alpha {}, beta {}"
+             .format(pgraph._np, kwargs.get('alpha', 0.0), beta))
+    best = optimize(
+        pgraph,
+        beta,
+        tsteps,
+        kmin,
+        kmax,
+        partials=partials,
+        **kwargs
+    )
 
     results = dict(best)
     val = utils.value(pgraph, **kwargs)
-    if return_obj:
-        r_vals = {}
-        r_vals[pgraph._np] = val
-    if save_partials:
+    if partials is not None:
         np.savez_compressed(
-            partials_flnm.format(pgraph.np),
+            partials.format(pgraph.np),
             partition=best,
             value=val,
             **kwargs,
@@ -1073,25 +1106,33 @@ def best_partition(
     log.info('{} -- {} '.format(pgraph._np, pgraph.print_partition()))
     log.info('   -- {}'.format(val))
 
-    if return_obj:
-        return results, r_vals
-    else:
-        return results
+    return results
 
 
-def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
+def optimize(
+        pgraph, beta,
+        tsteps,
+        kmin,
+        kmax,
+        partials=None,
+        **kwargs):
+
     bestp = pgraph.partition()
     cumul = 0.0
     moves = [0, 0, 0]
-    if 'tqdm' in sys.modules:
+    if 'tqdm' in sys.modules and log.level >= 20:
         tsrange = tqdm.trange(tsteps)
     else:
         tsrange = range(tsteps)
-    for _ in tsrange:
+    for i in tsrange:
         r_node, r_part, p, delta = pgraph._get_random_move(
             algorithm='new',
+            kmin=kmin,
+            kmax=kmax,
             **kwargs
         )
+        if r_part is None:
+            continue
 
         log.debug('proposed move: n {:5}, p {:5}, p() {:5.3f}, d {}'
                   .format(r_node, r_part, p, delta))
@@ -1110,7 +1151,7 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
             log.debug('accepted move')
         else:
             rand = np.random.rand()
-            threshold = np.exp(beta * delta) * p * probNorm
+            threshold = np.exp(beta * delta) * p
             if rand < threshold:
                 if r_part == pgraph.np:
                     pgraph._split(r_node)
@@ -1128,6 +1169,13 @@ def optimize(pgraph, beta, probNorm, tsteps, **kwargs):
             bestp = pgraph.partition()
             cumul = 0.0
             moves[2] += 1
+            if partials is not None:
+                np.savez_compressed(
+                    partials.format(pgraph.np),
+                    partition=bestp,
+                    value=cumul,
+                    **kwargs,
+                )
     log.info('good {}, not so good {}, best {}'.format(*moves))
     return bestp
 
