@@ -88,9 +88,11 @@ def partition2coo_sparse(part):
     """from dict {(i, j, k, …): weight, …}"""
     n_n = len(part)
     n_p = len(np.unique(list(part.values())))
+    parts = {v: k for k, v in enumerate(np.unique(list(part.values())))}
+    parts = [parts[v] for k, v in part.items()]
     try:
         return sparse.coo_matrix(
-            (np.ones(n_n), (list(part.keys()), list(part.values()))),
+            (np.ones(n_n), (list(part.keys()), parts)),
             shape=(n_n, n_p),
             dtype=float,
         )

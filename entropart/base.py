@@ -744,9 +744,6 @@ class SparseMat(object):
         if move_node is not None:
             part[move_node[0]] = old_part
 
-        # print(new_dok)
-        # print(max(list(part.values())) + 1)
-        # print(part)
         return SparseMat(
             new_dok,
             node_num=new_n_part,
