@@ -262,7 +262,7 @@ class PGraph(object):
             H2org = utils.entropy(p1_ego | p2_ego)
             H2dst = utils.entropy(p12_post)
 
-            delta_obj = utils.delta(h1org, H2org, h1dst, H2dst, **kwargs)
+            delta_obj = self.delta(h1org, H2org, h1dst, H2dst, **kwargs)
             self._tryed_moves[(inode, new_part)] = (prob_ratio, delta_obj)
 
         elif algorithm == 'correl':
@@ -332,7 +332,7 @@ class PGraph(object):
         H2org = utils.entropy(part_orig)
         H2dst = utils.entropy(part_dest)
 
-        d = utils.delta(h1org, H2org, h1dst, H2dst, **kwargs)
+        d = self.delta(h1org, H2org, h1dst, H2dst, **kwargs)
         self._tryed_moves[(inode, partition)] = d
         return d
 
@@ -389,7 +389,7 @@ class PGraph(object):
 
         h1pre = utils.entropy(self._ppi[p1]) + utils.entropy(self._ppi[p2])
         h1post = utils.entropy(self._ppi[p1] + self._ppi[p2])
-        return utils.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+        return self.delta(h1pre, H2pre, h1post, H2post, **kwargs)
 
     def _try_split(self, inode, **kwargs):
         # before splitting
@@ -415,7 +415,7 @@ class PGraph(object):
         part_ego_post = part_ego - ego_node
         H2post = utils.entropy(ego_node) + utils.entropy(part_ego_post)
 
-        return utils.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+        return self.delta(h1pre, H2pre, h1post, H2post, **kwargs)
 
     def _split(self, inode):
         old_part = self._i2p[inode]
@@ -534,6 +534,33 @@ class PGraph(object):
 
     def partition(self):
         return {self._i2n[i]: p for i, p in self._i2p.items()}
+
+    def delta(
+            self,
+            h1old,
+            h2old,
+            h1new,
+            h2new,
+            alpha=0.0,
+            gamma=None,
+            action='move'):
+
+        if gamma is not None:
+            if action == 'move':
+                dgamma = 0
+            elif action == 'merge':
+                dgamma = gamma * np.log(self.np / (self.np - 1))
+            elif action == 'split':
+                dgamma = gamma * np.log(self.np / (self.np + 1))
+            else:
+                raise ValueError(
+                    'action should be either `move`, `merge` or `split`'
+                )
+        else:
+            dgamma = 0
+
+
+        return (2 - alpha) * (h1new - h1old) - h2new + h2old - dgamma
 
 
 class Prob(object):
@@ -979,6 +1006,28 @@ class SparseMat(object):
         )
 
 
+class Partition(dict):
+    """A bidirectional dictionary to store partitions."""
+
+    def __init__(self, *args, **kwargs):
+        super(Partition, self).__init__(*args, **kwargs)
+        self.part = {}
+        for key, value in self.items():
+            self.part.setdefault(value, []).append(key)
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.part[self[key]].remove(key)
+        super(Partition, self).__setitem__(key, value)
+        self.part.setdefault(value, []).append(key)
+
+    def __delitem__(self, key):
+        self.part.setdefault(self[key], []).remove(key)
+        if self[key] in self.part and not self.part[self[key]]:
+            del self.part[self[key]]
+        super(Partition, self).__delitem__(key)
+
+
 def entrogram(graph, partition, depth=3):
     """TODO: Docstring for entrogram.
 
@@ -1060,8 +1109,9 @@ def best_partition(
             # start from a random partition with partitions in [kmin, kmax]
             k = int((kmax + kmin) / 2)
             part = [i % k for i in range(graph.number_of_nodes())]
+            np.random.shuffle(part)
             initp = {
-                n: i for i, n in zip(np.random.shuffle(part), graph.nodes())
+                n: i for i, n in zip(part, graph.nodes())
             }
         else:
             # start from N partitions
@@ -1116,7 +1166,12 @@ def optimize(
 
     bestp = pgraph.partition()
     cumul = 0.0
-    moves = [0, 0, 0]
+    moves = [
+        0,  # delta > 0
+        0,  # delta < 0 accepted
+        0,  # best
+        0  # changes since last move
+    ]
     if 'tqdm' in sys.modules and log.level >= 20:
         tsrange = tqdm.trange(tsteps)
     else:
@@ -1145,6 +1200,7 @@ def optimize(
                 pgraph._move_node(r_node, r_part)
             cumul += delta
             moves[0] += 1
+            moves[3] = 0
             log.debug('accepted move')
             if 'tqdm' in sys.modules and log.level >= 20:
                 tsrange.set_description('{} [{}]'.format(moves[2],
@@ -1161,13 +1217,14 @@ def optimize(
                     pgraph._move_node(r_node, r_part)
                 cumul += delta
                 moves[1] += 1
+                moves[3] = 0
                 log.debug('accepted move {} < {}'.format(rand, threshold))
                 if 'tqdm' in sys.modules and log.level >= 20:
                     tsrange.set_description('{} [{}]'.format(moves[2],
                                                              pgraph.np))
             else:
                 log.debug('rejected move')
-                pass
+                moves[3] += 1
 
         if cumul > 0:
             log.debug('BEST move +++ {} +++'.format(cumul))
@@ -1181,6 +1238,8 @@ def optimize(
                     value=cumul,
                     **kwargs,
                 )
+        if moves[3] > 1000:
+            break
     log.info('good {}, not so good {}, best {}'.format(*moves))
     return bestp
 

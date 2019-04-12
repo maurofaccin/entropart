@@ -30,9 +30,13 @@ def delta(h1old, h2old, h1new, h2new, alpha=0.0):
     return (2 - alpha) * (h1new - h1old) - h2new + h2old
 
 
-def value(pgraph, alpha=0.0):
+def value(pgraph, alpha=0.0, gamma=None):
+    if gamma is None:
+        dgamma = 0.0
+    else:
+        dgamma = gamma * np.log(pgraph.np)
     h1, h2 = pgraph.entropies()
-    return (2 - alpha) * h1 - h2
+    return (2 - alpha) * h1 - h2 - dgamma
 
 
 def get_probabilities(edges, node_num,
