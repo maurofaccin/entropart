@@ -214,6 +214,7 @@ class PGraph(object):
                 new_part = self._np
 
                 prob_move = delta
+                act = 'split'
             else:
                 # move inode to anothere partition
                 probs_go = self._move_probability(inode)
@@ -223,6 +224,7 @@ class PGraph(object):
                 )
                 p2_ego = self._ppij.get_egonet(new_part)
                 prob_move = probs_go[new_part]
+                act = 'move'
 
             if (inode, new_part) in self._tryed_moves:
                 return (inode,
@@ -262,7 +264,9 @@ class PGraph(object):
             H2org = utils.entropy(p1_ego | p2_ego)
             H2dst = utils.entropy(p12_post)
 
-            delta_obj = self.delta(h1org, H2org, h1dst, H2dst, **kwargs)
+            delta_obj = self.delta(
+                h1org, H2org, h1dst, H2dst, action=act, **kwargs
+            )
             self._tryed_moves[(inode, new_part)] = (prob_ratio, delta_obj)
 
         elif algorithm == 'correl':
@@ -332,7 +336,7 @@ class PGraph(object):
         H2org = utils.entropy(part_orig)
         H2dst = utils.entropy(part_dest)
 
-        d = self.delta(h1org, H2org, h1dst, H2dst, **kwargs)
+        d = self.delta(h1org, H2org, h1dst, H2dst, action='move', **kwargs)
         self._tryed_moves[(inode, partition)] = d
         return d
 
@@ -389,7 +393,9 @@ class PGraph(object):
 
         h1pre = utils.entropy(self._ppi[p1]) + utils.entropy(self._ppi[p2])
         h1post = utils.entropy(self._ppi[p1] + self._ppi[p2])
-        return self.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+        return self.delta(
+            h1pre, H2pre, h1post, H2post, action='merge', **kwargs
+        )
 
     def _try_split(self, inode, **kwargs):
         # before splitting
@@ -415,7 +421,9 @@ class PGraph(object):
         part_ego_post = part_ego - ego_node
         H2post = utils.entropy(ego_node) + utils.entropy(part_ego_post)
 
-        return self.delta(h1pre, H2pre, h1post, H2post, **kwargs)
+        return self.delta(
+            h1pre, H2pre, h1post, H2post, action='split', **kwargs
+        )
 
     def _split(self, inode):
         old_part = self._i2p[inode]
