@@ -229,7 +229,6 @@ class PGraph(object):
         H2_post = utils.entropy(p_sub)
 
         probs_back = self._move_probability(inode, part_probs=p_sub)
-
         prob_ratio = probs_back[old_part] / prob_move
 
         if new_part == self._np:
@@ -470,6 +469,7 @@ class PGraph(object):
         return np.sum([float(n) for n in self._ppi])
 
     def _reset(self):
+        self._ppij = self._pij.project(self._i2p)
         self._tryed_moves = {}
 
     def nodes(self):
@@ -847,7 +847,6 @@ class SparseMat(object):
         for p, d in other._dok.items():
             d_norm = d * ratio
             lprob = self._dok.get(p, None)
-
             if np.isclose(float(lprob), float(d_norm), atol=1e-12):
                 for i in p:
                     self.__p_thr[i].discard(p)
@@ -887,6 +886,15 @@ class SparseMat(object):
         new *= other
         return new
 
+    def __eq__(self, other):
+        for p, v in self._dok.items():
+            if not np.isclose(
+                    float(v / self._norm),
+                    float(other._dok[p] / other._norm),
+                    atol=1e-10):
+                return False
+        return True
+
     def set_path(self, path, weight):
         """ Overwrite path weight. """
         self._dok[path] = Prob(weight) * self._norm
@@ -921,17 +929,16 @@ class SparseMat(object):
         self.__p_thr.append(set())
         return self._nn - 1
 
-    def merge_colrow(self, indx1, indx2):
-        indx1, indx2 = sorted([indx1, indx2])
+    def merge_colrow(self, index1, index2):
+        indx1, indx2 = sorted([index1, index2])
         new_dict = {}
         for path, value in self._dok.items():
             if indx2 in path:
-                path = tuple(i if i != indx2 else indx1 for i in path)
-            path = tuple(i - int(i > indx2) for i in path)
-            if path in new_dict:
-                new_dict[path] += value
-            else:
-                new_dict[path] = value
+                newpath = tuple(i if i != indx2 else indx1 for i in path)
+            newpath = tuple(i - int(i > indx2) for i in newpath)
+
+            new_dict.setdefault(newpath, 0.0)
+            new_dict[newpath] += value
 
         return SparseMat(new_dict, node_num=self._nn - 1, normalize=self._norm)
 
@@ -1141,6 +1148,7 @@ def optimize(pgraph, beta, tsteps, kmin, kmax, partials=None, **kwargs):
             if r_part == pgraph.np:
                 pgraph._split(r_node)
             else:
+                # move or merge
                 pgraph._move_node(r_node, r_part)
             cumul += delta
             moves[0] += 1
