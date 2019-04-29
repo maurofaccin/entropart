@@ -935,6 +935,8 @@ class SparseMat(object):
         for path, value in self._dok.items():
             if indx2 in path:
                 newpath = tuple(i if i != indx2 else indx1 for i in path)
+            else:
+                newpath = tuple(path)
             newpath = tuple(i - int(i > indx2) for i in newpath)
 
             new_dict.setdefault(newpath, 0.0)
