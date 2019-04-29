@@ -84,7 +84,6 @@ class PGraph(object):
 
             # projected probabilities
             p_pij = _part.transpose() @ pij @ _part
-            # self._pij = SparseMat(self._pij)
             p_pi = _part.transpose() @ pi
         else:
             pij = {
@@ -224,7 +223,9 @@ class PGraph(object):
         n_ego_post = n_ego_full.project(self._i2p, move_node=(inode, new_part))
 
         H2_pre = utils.entropy(p_sub)
-        p_sub += n_ego_post - n_ego
+        # I make this in two steps in order to get alway positive values
+        p_sub += n_ego_post
+        p_sub -= n_ego
         H2_post = utils.entropy(p_sub)
 
         probs_back = self._move_probability(inode, part_probs=p_sub)
@@ -338,10 +339,7 @@ class PGraph(object):
         return best["parts"]
 
     def _try_merge(self, p1, p2, **kwargs):
-        p1_ego = self._ppij.get_egonet(p1)
-        p2_ego = self._ppij.get_egonet(p2)
-        # union
-        p12 = p1_ego | p2_ego
+        p12 = self._ppij.get_submat([p1, p2])
         H2pre = utils.entropy(p12)
 
         p12 = p12.merge_colrow(p1, p2)
@@ -402,7 +400,9 @@ class PGraph(object):
         # self._i2p
         self._i2p[inode] = new_part
         en_post = ego_node.project(self._i2p)
-        self._ppij += en_post - en_pre
+        # make this in two steps in order to have always non negative values
+        self._ppij += en_post
+        self._ppij -= en_pre
 
         # self._p2i
         self._p2i[old_part].remove(inode)
@@ -502,9 +502,8 @@ class PGraph(object):
         return {self._i2n[i]: p for i, p in self._i2p.items()}
 
     def delta(
-        self, h1old, h2old, h1new, h2new, alpha=0.0, gamma=None, action="move"
+            self, h1old, h2old, h1new, h2new, alpha=0.0, gamma=None, action="move"
     ):
-
         if gamma is not None:
             if action == "move":
                 dgamma = 0
@@ -520,6 +519,13 @@ class PGraph(object):
             dgamma = 0
 
         return (2 - alpha) * (h1new - h1old) - h2new + h2old - dgamma
+
+    def value(self, **kwargs):
+        return utils.value(
+            self,
+            alpha=kwargs.get("alpha", 0.0),
+            gamma=kwargs.get("gamma", None),
+        )
 
 
 class Prob(object):
@@ -538,10 +544,12 @@ class Prob(object):
             self.__update_plogp()
 
     def __update_plogp(self):
-        if self.__p > 0.0:
+        if 0.0 < self.__p < 1.0:
             self.__plogp = self.__p * np.log2(self.__p)
-        else:
+        elif np.isclose(self.__p, 0.0, 1e-13) or np.isclose(self.__p, 1.0):
             self.__plogp = 0.0
+        else:
+            raise ValueError("A probability should be between 0 and 1")
 
     @property
     def plogp(self):
@@ -578,10 +586,13 @@ class Prob(object):
         return new
 
     def __imul__(self, other):
-        p = self.__p
+        # update p
+        oldp = self.__p
         self.__p *= float(other)
+
+        # update plogp
         if isinstance(other, Prob):
-            self.__plogp = other.p * self.plogp + p * other.plogp
+            self.__plogp = other.p * self.plogp + oldp * other.plogp
         else:
             self.__update_plogp()
         return self
@@ -835,13 +846,15 @@ class SparseMat(object):
         """Can provide negative values."""
         for p, d in other._dok.items():
             d_norm = d * ratio
-            if np.isclose(float(self._dok.get(p, 0.0)), float(d_norm)):
+            lprob = self._dok.get(p, None)
+
+            if np.isclose(float(lprob), float(d_norm), atol=1e-12):
                 for i in p:
                     self.__p_thr[i].discard(p)
                 del self._dok[p]
             else:
                 # no need to update __p_thr
-                self._dok[p] = self._dok.get(p, Prob(0.0)) - d_norm
+                self._dok[p] -= d_norm
         return self
 
     def __sub__(self, other):
@@ -1080,7 +1093,10 @@ def best_partition(
 
     if partials is not None:
         np.savez_compressed(
-            partials.format(pgraph.np), partition=results, value=value, **kwargs
+            partials.format(pgraph.np),
+            partition=results,
+            value=value,
+            **kwargs,
         )
 
     log.info("final: num part {}".format(pgraph.np))

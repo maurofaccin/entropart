@@ -4,7 +4,7 @@ import numpy as np
 from scipy import sparse
 from entropart import base
 
-np.seterr(all='raise')
+np.seterr(all="raise")
 
 
 def entropy(array):
@@ -13,7 +13,7 @@ def entropy(array):
     if isinstance(array, (float, np.float32, np.float64)):
         if array <= 0.0:
             return 0.0
-        return - array * np.log2(array)
+        return -array * np.log2(array)
 
     # if it is a vector or matrix
     try:
@@ -23,7 +23,7 @@ def entropy(array):
         # otherwise use numpy
         array = np.array(array)
         array = array[array > 0]
-        return - np.sum(array * np.log2(array))
+        return -np.sum(array * np.log2(array))
 
 
 def delta(h1old, h2old, h1new, h2new, alpha=0.0):
@@ -39,9 +39,9 @@ def value(pgraph, alpha=0.0, gamma=None):
     return (2 - alpha) * h1 - h2 - dgamma
 
 
-def get_probabilities(edges, node_num,
-                      symmetric=False,
-                      return_transition=False):
+def get_probabilities(
+    edges, node_num, symmetric=False, return_transition=False
+):
     """Compute p_ij and p_i at the steady state"""
 
     graph = edgelist2csr_sparse(edges, node_num)
@@ -50,7 +50,7 @@ def get_probabilities(edges, node_num,
     if symmetric and not return_transition:
         return (
             graph / graph.sum(),
-            np.array(steadystate).flatten() / graph.sum()
+            np.array(steadystate).flatten() / graph.sum(),
         )
 
     diag = sparse.spdiags(1.0 / steadystate, [0], node_num, node_num)
@@ -67,7 +67,9 @@ def get_probabilities(edges, node_num,
         if count > 1e5:
             break
 
-    diag = sparse.spdiags(steadystate.reshape((1, -1)), [0], node_num, node_num)
+    diag = sparse.spdiags(
+        steadystate.reshape((1, -1)), [0], node_num, node_num
+    )
     if return_transition:
         return transition, diag, np.array(steadystate).flatten()
     else:
@@ -81,9 +83,9 @@ def edgelist2csr_sparse(edgelist, node_num):
             # data
             [e[2] for e in edgelist],
             # i and j
-            ([e[1] for e in edgelist], [e[0] for e in edgelist])
+            ([e[1] for e in edgelist], [e[0] for e in edgelist]),
         ),
-        shape=(node_num, node_num)
+        shape=(node_num, node_num),
     )
     return sparse.csr_matrix(graph)
 
@@ -122,9 +124,5 @@ def zeros(node_num):
 
 def zeros_like(sparsemat):
     return base.SparseMat(
-        {},
-        node_num=sparsemat.nn,
-        normalize=1.0,
-        plength=sparsemat._dim
+        {}, node_num=sparsemat.nn, normalize=1.0, plength=sparsemat._dim
     )
-
