@@ -544,7 +544,7 @@ class Prob(object):
             self.__update_plogp()
 
     def __update_plogp(self):
-        if 0.0 < self.__p < 1.0:
+        if 0.0 < self.__p < np.inf:
             self.__plogp = self.__p * np.log2(self.__p)
         elif np.isclose(self.__p, 0.0, 1e-13) or np.isclose(self.__p, 1.0):
             self.__plogp = 0.0
