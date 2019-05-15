@@ -106,7 +106,8 @@ class PGraph(object):
 
         self._pij = SparseMat(pij, normalize=True)
         self._pi = pi / pi.sum()
-        self._ppij = SparseMat(p_pij, normalize=True)
+        # self._ppij = SparseMat(p_pij, normalize=True)
+        self._ppij = self._pij.project(self._i2p)
         self._ppi = p_pi / p_pi.sum()
 
         assert np.isclose(self._pij.sum(), 1.0)
@@ -469,7 +470,6 @@ class PGraph(object):
         return np.sum([float(n) for n in self._ppi])
 
     def _reset(self):
-        self._ppij = self._pij.project(self._i2p)
         self._tryed_moves = {}
 
     def nodes(self):
@@ -499,10 +499,15 @@ class PGraph(object):
         return utils.entropy(self._ppi), utils.entropy(self._ppij)
 
     def partition(self):
+        """Return a dict of node: partition."""
         return {self._i2n[i]: p for i, p in self._i2p.items()}
 
+    def partitions(self):
+        """Return a list of partion names."""
+        return list(self._p2i.keys())
+
     def delta(
-            self, h1old, h2old, h1new, h2new, alpha=0.0, gamma=None, action="move"
+        self, h1old, h2old, h1new, h2new, alpha=0.0, gamma=None, action="move"
     ):
         if gamma is not None:
             if action == "move":
@@ -889,9 +894,10 @@ class SparseMat(object):
     def __eq__(self, other):
         for p, v in self._dok.items():
             if not np.isclose(
-                    float(v / self._norm),
-                    float(other._dok[p] / other._norm),
-                    atol=1e-10):
+                float(v / self._norm),
+                float(other._dok[p] / other._norm),
+                atol=1e-10,
+            ):
                 return False
         return True
 
@@ -930,14 +936,15 @@ class SparseMat(object):
         return self._nn - 1
 
     def merge_colrow(self, index1, index2):
+        if index1 == index2:
+            return self.copy()
+
         indx1, indx2 = sorted([index1, index2])
         new_dict = {}
         for path, value in self._dok.items():
-            if indx2 in path:
-                newpath = tuple(i if i != indx2 else indx1 for i in path)
-            else:
-                newpath = tuple(path)
-            newpath = tuple(i - int(i > indx2) for i in newpath)
+            newpath = tuple(
+                i - int(i > indx2) if i != indx2 else indx1 for i in path
+            )
 
             new_dict.setdefault(newpath, 0.0)
             new_dict[newpath] += value
@@ -992,6 +999,32 @@ class Partition(dict):
         if self[key] in self.part and not self.part[self[key]]:
             del self.part[self[key]]
         super(Partition, self).__delitem__(key)
+
+
+def neigneig(pgraph, node, kind="projected"):
+    """Return the set of neighbours of neighbours of node."""
+
+    if kind == "projected":
+        s_mat = pgraph._ppij
+    elif kind == "full":
+        s_mat = pgraph._pij
+    else:
+        raise ValueError("kind can be only 'projected' or 'full'")
+
+    nn = {}
+    for op in s_mat.paths_through_node(node, position=0):
+        s_mat_op = s_mat[op]
+        for ip in s_mat.paths_through_node(op[-1], position=-1):
+            nn.setdefault(ip[0], 0.0)
+            nn[ip[0]] += s_mat[ip] * s_mat_op
+
+    for ip in s_mat.paths_through_node(node, position=-1):
+        s_mat_ip = s_mat[ip]
+        for op in s_mat.paths_through_node(ip[0], position=0):
+            nn.setdefault(op[-1], 0.0)
+            nn[op[-1]] += s_mat[op] * s_mat_ip
+
+    return nn
 
 
 def entrogram(graph, partition, depth=3):
