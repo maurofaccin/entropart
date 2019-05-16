@@ -470,6 +470,7 @@ class PGraph(object):
         return np.sum([float(n) for n in self._ppi])
 
     def _reset(self):
+        self._ppij = self._pij.project(self._i2p)
         self._tryed_moves = {}
 
     def nodes(self):
@@ -852,6 +853,8 @@ class SparseMat(object):
         for p, d in other._dok.items():
             d_norm = d * ratio
             lprob = self._dok.get(p, None)
+            if lprob is None:
+                print('AAA', d, ratio, p, d_norm)
             if np.isclose(float(lprob), float(d_norm), atol=1e-12):
                 for i in p:
                     self.__p_thr[i].discard(p)
