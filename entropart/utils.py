@@ -26,17 +26,17 @@ def entropy(array):
         return -np.sum(array * np.log2(array))
 
 
-def delta(h1old, h2old, h1new, h2new, alpha=0.0):
-    return (2 - alpha) * (h1new - h1old) - h2new + h2old
+def delta(h1old, h2old, h1new, h2new, beta=0.0):
+    return (2 - beta) * (h1new - h1old) - h2new + h2old
 
 
-def value(pgraph, alpha=0.0, gamma=None):
+def value(pgraph, beta=0.0, gamma=None):
     if gamma is None:
         dgamma = 0.0
     else:
         dgamma = gamma * np.log(pgraph.np)
     h1, h2 = pgraph.entropies()
-    return (2 - alpha) * h1 - h2 - dgamma
+    return (2 - beta) * h1 - h2 - dgamma
 
 
 def get_probabilities(

@@ -508,7 +508,7 @@ class PGraph(object):
         return list(self._p2i.keys())
 
     def delta(
-        self, h1old, h2old, h1new, h2new, alpha=0.0, gamma=None, action="move"
+        self, h1old, h2old, h1new, h2new, beta=0.0, gamma=None, action="move"
     ):
         if gamma is not None:
             if action == "move":
@@ -524,12 +524,12 @@ class PGraph(object):
         else:
             dgamma = 0
 
-        return (2 - alpha) * (h1new - h1old) - h2new + h2old - dgamma
+        return (2 - beta) * (h1new - h1old) - h2new + h2old - dgamma
 
     def value(self, **kwargs):
         return utils.value(
             self,
-            alpha=kwargs.get("alpha", 0.0),
+            beta=kwargs.get("beta", 0.0),
             gamma=kwargs.get("gamma", None),
         )
 
@@ -1124,8 +1124,8 @@ def best_partition(
     pgraph = PGraph(graph, compute_steady=compute_steady, init_part=initp)
 
     log.info(
-        "Optimization with {} parts, alpha {}, beta {}".format(
-            pgraph._np, kwargs.get("alpha", 0.0), beta
+        "Optimization with {} parts, beta {}, beta {}".format(
+            pgraph._np, kwargs.get("beta", 0.0), beta
         )
     )
     best = optimize(
