@@ -1232,3 +1232,32 @@ def optimize(pgraph, beta, tsteps, kmin, kmax, partials=None, **kwargs):
             break
     log.info("good {}, not so good {}, best {}".format(*moves))
     return bestp
+
+
+def merge_pgraph(pgraph, complete=False, **kwargs):
+    found = True
+    while found:
+        found = False
+        pis = pgraph.partitions()
+        for pi in pis:
+            if pi not in pgraph.partitions():
+                continue
+            neighborhood = list(neigneig(pgraph, pi))
+            np.random.shuffle(neighborhood)
+
+            best = (0, None)
+            for pj in neighborhood:
+                if pj == pi:
+                    continue
+
+                d = pgraph._try_merge(pi, pj, **kwargs)
+                if d > best[0]:
+                    found = True
+
+                    if complete:
+                        best = (d, pj)
+                    else:
+                        pgraph.merge_partitions(pi, pj)
+                        break
+            if best[1] is not None:
+                pgraph.merge_partitions(pi, best[1])
