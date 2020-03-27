@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import numpy as np
-import networkx as nx
-from scipy import sparse
 from collections import Counter
 import logging
 import sys
+
+import numpy as np
+import networkx as nx
+from scipy import sparse
 from . import utils
 
 try:
@@ -1081,15 +1082,15 @@ def entrogram(graph, partition, depth=3):
 
 
 def best_partition(
-    graph,
-    init_part=None,
-    kmin=None,
-    kmax=None,
-    beta=1.0,
-    compute_steady=True,
-    partials=None,
-    tsteps=4000,
-    **kwargs,
+        graph,
+        init_part=None,
+        kmin=None,
+        kmax=None,
+        invtemp=1.0,
+        compute_steady=True,
+        partials=None,
+        tsteps=4000,
+        **kwargs
 ):
     """TODO: Docstring for best_partition.
 
@@ -1124,12 +1125,12 @@ def best_partition(
     pgraph = PGraph(graph, compute_steady=compute_steady, init_part=initp)
 
     log.info(
-        "Optimization with {} parts, beta {}, beta {}".format(
-            pgraph._np, kwargs.get("beta", 0.0), beta
+        "Optimization with {} parts, beta {}, 1/T {}".format(
+            pgraph._np, kwargs.get("beta", 0.0), invtemp
         )
     )
     best = optimize(
-        pgraph, beta, tsteps, kmin, kmax, partials=partials, **kwargs
+        pgraph, invtemp, tsteps, kmin, kmax, partials=partials, **kwargs
     )
 
     results = dict(best)
@@ -1151,7 +1152,7 @@ def best_partition(
     return results
 
 
-def optimize(pgraph, beta, tsteps, kmin, kmax, partials=None, **kwargs):
+def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
     bestp = pgraph.partition()
     cumul = 0.0
     moves = [
@@ -1198,7 +1199,7 @@ def optimize(pgraph, beta, tsteps, kmin, kmax, partials=None, **kwargs):
             rand = np.random.rand()
             if rand == 0.0:
                 continue
-            threshold = beta * delta + np.log(p)
+            threshold = invtemp * delta + np.log(p)
             if np.log(rand) < threshold:
                 if r_part == pgraph.np:
                     pgraph._split(r_node)
