@@ -334,12 +334,12 @@ class PGraph(object):
         best = {"parts": (None, None), "delta": -np.inf}
         for p1 in range(self._np):
             for p2 in range(p1 + 1, self._np):
-                d = self._try_merge(p1, p2, **kwargs)
+                d = self.try_merge(p1, p2, **kwargs)
                 if d > best["delta"]:
                     best = {"parts": (p1, p2), "delta": d}
         return best["parts"]
 
-    def _try_merge(self, p1, p2, **kwargs):
+    def try_merge(self, p1, p2, **kwargs):
         p12 = self._ppij.get_submat([p1, p2])
         H2pre = utils.entropy(p12)
 
@@ -1236,29 +1236,31 @@ def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
 
 
 def merge_pgraph(pgraph, complete=False, **kwargs):
+    """Merge in a hierarchical way,
+    use `complete` to seak for best partition in each level.
+    """
     found = True
     while found:
         found = False
-        pis = pgraph.partitions()
-        for pi in pis:
-            if pi not in pgraph.partitions():
+        for part1 in pgraph.partitions():
+            if part1 not in pgraph.partitions():
                 continue
-            neighborhood = list(neigneig(pgraph, pi))
+            neighborhood = list(neigneig(pgraph, part1))
             np.random.shuffle(neighborhood)
 
             best = (0, None)
-            for pj in neighborhood:
-                if pj == pi:
+            for part2 in neighborhood:
+                if part2 == part1:
                     continue
 
-                d = pgraph._try_merge(pi, pj, **kwargs)
-                if d > best[0]:
+                distance = pgraph.try_merge(part1, part2, **kwargs)
+                if distance > best[0]:
                     found = True
 
                     if complete:
-                        best = (d, pj)
+                        best = (distance, part2)
                     else:
-                        pgraph.merge_partitions(pi, pj)
+                        pgraph.merge_partitions(part1, part2)
                         break
             if best[1] is not None:
-                pgraph.merge_partitions(pi, best[1])
+                pgraph.merge_partitions(part1, best[1])
