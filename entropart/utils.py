@@ -103,8 +103,7 @@ def partition2coo_sparse(part):
             dtype=float,
         )
     except ValueError:
-        print(n_p)
-        print(n_n)
+        print(n_p, n_n)
         raise
 
 

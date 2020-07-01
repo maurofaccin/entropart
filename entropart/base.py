@@ -183,7 +183,7 @@ class PGraph(object):
             # do not go for a new partition
             delta = 0.0
         else:
-            delta = 1.0 / (self._np + 1)
+            delta = 1.0 / (self._nn + 1)
 
         if kmin is not None:
             if len(self._p2i[old_part]) == 1 and self._np == kmin:
@@ -191,6 +191,9 @@ class PGraph(object):
                 return inode, None, None, None
 
         n_ego_full = self._pij.get_egonet(inode)
+        if n_ego_full is None:
+            return None, None, None, None
+        #     n_ego_full = self._pij.get_egonet(inode)
         n_ego = n_ego_full.project(self._i2p)
 
         if np.random.random() < delta:
@@ -1082,16 +1085,15 @@ def entrogram(graph, partition, depth=3):
 
 
 def best_partition(
-        graph,
-        init_part=None,
-        kmin=None,
-        kmax=None,
-        invtemp=1.0,
-        compute_steady=True,
-        partials=None,
-        tsteps=4000,
-        **kwargs
-):
+            graph,
+            init_part=None,
+            kmin=None,
+            kmax=None,
+            invtemp=1.0,
+            compute_steady=True,
+            partials=None,
+            tsteps=4000,
+            **kwargs):
     """TODO: Docstring for best_partition.
 
     :graph: nx.Graph or nx.DiGraph
@@ -1108,7 +1110,7 @@ def best_partition(
     if init_part is None:
         if kmax < graph.number_of_nodes():
             # start from a random partition with partitions in [kmin, kmax]
-            k = int((kmax + kmin) / 2)
+            k = (kmax + kmin) // 2
             part = [i % k for i in range(graph.number_of_nodes())]
             np.random.shuffle(part)
             initp = {n: i for i, n in zip(part, graph.nodes())}
@@ -1166,7 +1168,7 @@ def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
     else:
         tsrange = range(tsteps)
 
-    for i in tsrange:
+    for _ in tsrange:
         r_node, r_part, p, delta = pgraph._get_random_move(
             kmin=kmin, kmax=kmax, **kwargs
         )
