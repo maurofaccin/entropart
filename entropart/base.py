@@ -1131,6 +1131,8 @@ def best_partition(
             pgraph._np, kwargs.get("beta", 0.0), invtemp
         )
     )
+
+    merge_pgraph(pgraph, **kwargs)
     best = optimize(
         pgraph, invtemp, tsteps, kmin, kmax, partials=partials, **kwargs
     )
@@ -1168,7 +1170,7 @@ def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
     else:
         tsrange = range(tsteps)
 
-    for _ in tsrange:
+    for tstep in tsrange:
         r_node, r_part, p, delta = pgraph._get_random_move(
             kmin=kmin, kmax=kmax, **kwargs
         )
@@ -1201,7 +1203,11 @@ def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
             rand = np.random.rand()
             if rand == 0.0:
                 continue
-            threshold = invtemp * delta + np.log(p)
+
+            sim_ann = 1.0 - tstep / tsteps
+            if sim_ann == 0.0:
+                continue
+            threshold = invtemp * delta / sim_ann + np.log(p)
             if np.log(rand) < threshold:
                 if r_part == pgraph.np:
                     pgraph._split(r_node)
@@ -1231,7 +1237,7 @@ def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
                     value=cumul,
                     **kwargs,
                 )
-        if moves[3] > 1000:
+        if moves[3] > 200:
             break
     log.info("good {}, not so good {}, best {}".format(*moves))
     return bestp
