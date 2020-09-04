@@ -40,23 +40,31 @@ def value(pgraph, beta=0.0, gamma=None):
 
 
 def get_probabilities(
-    edges, node_num, symmetric=False, return_transition=False
-):
+        edges,
+        node_num,
+        symmetric=False,
+        return_transition=False,
+        compute_steady=False,
+        T=None
+        ):
     """Compute p_ij and p_i at the steady state"""
 
     graph = edgelist2csr_sparse(edges, node_num)
+    if symmetric:
+        graph += graph.transpose()
     steadystate = graph.sum(0)
-
-    if symmetric and not return_transition:
-        return (
-            graph / graph.sum(),
-            np.array(steadystate).flatten() / graph.sum(),
-        )
 
     diag = sparse.spdiags(1.0 / steadystate, [0], node_num, node_num)
     transition = graph @ diag
 
-    diff = 1.0
+    if T is not None:
+        transition = transition ** T
+
+    if compute_steady:
+        diff = 1.0
+    else:
+        # go into the loop only if I need to compute the steady state recursively
+        diff = 0.0
     count = 0
     steadystate = np.array(steadystate).reshape(-1, 1) / steadystate.sum()
     while diff > 1e-10:

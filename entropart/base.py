@@ -4,6 +4,7 @@
 from collections import Counter
 import logging
 import sys
+import itertools
 
 import numpy as np
 import networkx as nx
@@ -26,7 +27,7 @@ SYMBOLS = "0123456789ABCDEFGHJKLMNOPQRSTUVWXYZabcdefghjklmnopqrstuvwxyz"
 class PGraph(object):
     """A Graph with partition."""
 
-    def __init__(self, graph, compute_steady=True, init_part=None):
+    def __init__(self, graph, compute_steady=True, init_part=None, T=None):
         """A graph with partition
 
         :graph: nx.[Di]Graph()
@@ -41,6 +42,7 @@ class PGraph(object):
             self._isdirected = False
         else:
             raise ValueError("Need nx.[Di]Graph, not " + str(type(graph)))
+
         _graph = nx.DiGraph(graph)
         nn = _graph.number_of_nodes()
 
@@ -49,13 +51,39 @@ class PGraph(object):
         # index to node map
         self._i2n = {i: n for n, i in self._n2i.items()}
 
+        # compute the probabilities p(i, j) and p(i)
+        self.__st_computed = compute_steady
+        edges = [
+            (self._n2i[i], self._n2i[j], w)
+            for i, j, w in _graph.edges.data("weight", default=1.0)
+        ]
+        pij, pi = utils.get_probabilities(
+            edges,
+            nn,
+            symmetric=not self._isdirected,
+            return_transition=False,
+            compute_steady=compute_steady,
+            T=T
+        )
+        self._pij = SparseMat(pij, normalize=True)
+        self._pi = pi / pi.sum()
+
+        # save partition and projected p(i,j) and p(i)
+        self.set_partition(init_part)
+
+        assert np.isclose(self._pij.sum(), 1.0)
+        assert np.isclose(self._ppij.sum(), 1.0)
+
+        self._reset()
+
+    def set_partition(self, partition):
         # set up partition
-        if init_part is None:
+        if partition is None:
             # every node in its own partition
-            _part = sparse.eye(len(_graph.nodes()), dtype=float, format="coo")
+            _part = sparse.eye(len(self._n2i), dtype=float, format="coo")
         else:
             _part = utils.partition2coo_sparse(
-                {self._n2i[k]: v for k, v in init_part.items()}
+                {self._n2i[k]: v for k, v in partition.items()}
             )
 
         # save the partition as a double dict
@@ -69,52 +97,9 @@ class PGraph(object):
         _part = sparse.csr_matrix(_part)
         self._nn, self._np = _part.shape
 
-        # compute the probabilities p(i, j) and p(i)
-        self.__st_computed = compute_steady
-        if compute_steady:
-            edges = [
-                (self._n2i[i], self._n2i[j], w)
-                for i, j, w in _graph.edges.data("weight", default=1.0)
-            ]
-            pij, pi = utils.get_probabilities(
-                edges,
-                nn,
-                symmetric=not self._isdirected,
-                return_transition=False,
-            )
-
-            # projected probabilities
-            p_pij = _part.transpose() @ pij @ _part
-            p_pi = _part.transpose() @ pi
-        else:
-            pij = {
-                (self._n2i[i], self._n2i[j]): w
-                for i, j, w in _graph.edges.data("weight", default=1.0)
-            }
-            pi = np.zeros(self._nn)
-            p_pij = {}
-            for (i, j), w in pij.items():
-                pi[i] += w
-                ppi, ppj = self._i2p[i], self._i2p[j]
-                if (ppi, ppj) in p_pij:
-                    p_pij[(ppi, ppj)] += w
-                else:
-                    p_pij[(ppi, ppj)] = w
-
-            p_pi = np.zeros(self._np)
-            for (i, j), w in p_pij.items():
-                p_pi[i] += w
-
-        self._pij = SparseMat(pij, normalize=True)
-        self._pi = pi / pi.sum()
-        # self._ppij = SparseMat(p_pij, normalize=True)
         self._ppij = self._pij.project(self._i2p)
+        p_pi = _part.transpose() @ self._pi
         self._ppi = p_pi / p_pi.sum()
-
-        assert np.isclose(self._pij.sum(), 1.0)
-        assert np.isclose(self._ppij.sum(), 1.0)
-
-        self._reset()
 
     @property
     def np(self):
@@ -333,13 +318,21 @@ class PGraph(object):
 
         self._reset()
 
-    def _get_best_merge(self, **kwargs):
+    def _get_best_merge(self, checks=200, **kwargs):
         best = {"parts": (None, None), "delta": -np.inf}
-        for p1 in range(self._np):
-            for p2 in range(p1 + 1, self._np):
-                d = self.try_merge(p1, p2, **kwargs)
-                if d > best["delta"]:
-                    best = {"parts": (p1, p2), "delta": d}
+        if self._np <= 1:
+            return None
+
+        for p1, p2 in neigneig_full(self):
+            d = self.try_merge(p1, p2, **kwargs)
+            if d > best["delta"]:
+                best = {"parts": (p1, p2), "delta": d}
+            if d > 0:
+                break
+            checks -= 1
+            if checks < 1:
+                break
+
         return best["parts"]
 
     def try_merge(self, p1, p2, **kwargs):
@@ -823,11 +816,12 @@ class SparseMat(object):
 
     def paths(self, axis=None, node=None):
         if axis is None or node is None:
-            return self.__iter__()
+            yield from self.__iter__()
 
-        for p, v in self._dok.items():
-            if p[axis] == node:
-                yield p, v / self._norm
+        else:
+            for p, v in self._dok.items():
+                if p[axis] == node:
+                    yield p, v / self._norm
 
     def __getitem__(self, item):
         try:
@@ -1034,6 +1028,30 @@ def neigneig(pgraph, node, kind="projected"):
     return nn
 
 
+def neigneig_full(pgraph, kind='projected'):
+    """Return the set of neighbours of neighbours of node."""
+
+    if kind == "projected":
+        s_mat = pgraph._ppij
+    elif kind == "full":
+        s_mat = pgraph._pij
+    else:
+        raise ValueError("kind can be only 'projected' or 'full'")
+
+    inpairs = [set() for _ in range(s_mat.nn)]
+    outpairs = [set() for _ in range(s_mat.nn)]
+
+    for (p1, p2), v in s_mat.paths():
+        inpairs[p1].add(p2)
+        outpairs[p2].add(p1)
+
+    pairs = set()
+    for s in inpairs + outpairs:
+        pairs |= set(itertools.combinations(sorted(s), 2))
+
+    return pairs
+
+
 def entrogram(graph, partition, depth=3):
     """TODO: Docstring for entrogram.
 
@@ -1087,12 +1105,13 @@ def entrogram(graph, partition, depth=3):
 def best_partition(
             graph,
             init_part=None,
+            T=None,
             kmin=None,
             kmax=None,
-            invtemp=1.0,
+            invtemp=1e6,
             compute_steady=True,
             partials=None,
-            tsteps=4000,
+            tsteps=10000,
             **kwargs):
     """TODO: Docstring for best_partition.
 
@@ -1105,18 +1124,11 @@ def best_partition(
         kmax = graph.number_of_nodes()
 
     if kmin is None:
-        kmin = 2
+        kmin = 1
 
     if init_part is None:
-        if kmax < graph.number_of_nodes():
-            # start from a random partition with partitions in [kmin, kmax]
-            k = (kmax + kmin) // 2
-            part = [i % k for i in range(graph.number_of_nodes())]
-            np.random.shuffle(part)
-            initp = {n: i for i, n in zip(part, graph.nodes())}
-        else:
-            # start from N partitions
-            initp = {n: i for i, n in enumerate(graph.nodes())}
+        # start from N partitions
+        initp = {n: i for i, n in enumerate(graph.nodes())}
     elif isinstance(init_part, dict):
         initp = init_part
     else:
@@ -1124,7 +1136,7 @@ def best_partition(
             "init_part should be a dict not {}".format(type(init_part))
         )
 
-    pgraph = PGraph(graph, compute_steady=compute_steady, init_part=initp)
+    pgraph = PGraph(graph, compute_steady=compute_steady, init_part=initp, T=T)
 
     log.info(
         "Optimization with {} parts, beta {}, 1/T {}".format(
@@ -1132,13 +1144,13 @@ def best_partition(
         )
     )
 
-    merge_pgraph(pgraph, **kwargs)
+    merge_pgraph(pgraph, kmin=kmin, kmax=kmax, **kwargs)
     best = optimize(
         pgraph, invtemp, tsteps, kmin, kmax, partials=partials, **kwargs
     )
 
     results = dict(best)
-    pgraph = PGraph(graph, compute_steady=compute_steady, init_part=results)
+    pgraph.set_partition(results)
     value = utils.value(pgraph, **kwargs)
 
     if partials is not None:
@@ -1237,38 +1249,35 @@ def optimize(pgraph, invtemp, tsteps, kmin, kmax, partials=None, **kwargs):
                     value=cumul,
                     **kwargs,
                 )
-        if moves[3] > 200:
+        if moves[3] > 500:
             break
     log.info("good {}, not so good {}, best {}".format(*moves))
     return bestp
 
 
-def merge_pgraph(pgraph, complete=False, **kwargs):
+def merge_pgraph(pgraph, kmin=1, kmax=np.inf, **kwargs):
     """Merge in a hierarchical way,
     use `complete` to seak for best partition in each level.
+    otherwise it will merge the first pair with positive increase in AI.
     """
-    found = True
-    while found:
-        found = False
-        for part1 in pgraph.partitions():
-            if part1 not in pgraph.partitions():
-                continue
-            neighborhood = list(neigneig(pgraph, part1))
-            np.random.shuffle(neighborhood)
 
-            best = (0, None)
-            for part2 in neighborhood:
-                if part2 == part1:
-                    continue
+    if kmin > pgraph.np:
+        return None
 
-                distance = pgraph.try_merge(part1, part2, **kwargs)
-                if distance > best[0]:
-                    found = True
+    elif pgraph.np <= kmax:
+        best_part = (pgraph.value(**kwargs), pgraph.partition())
 
-                    if complete:
-                        best = (distance, part2)
-                    else:
-                        pgraph.merge_partitions(part1, part2)
-                        break
-            if best[1] is not None:
-                pgraph.merge_partitions(part1, best[1])
+    else:
+        best_part = (-np.inf, None)
+
+    while pgraph.np > kmin:
+        print(pgraph.np, ' ', end='\r')
+        best = pgraph._get_best_merge(**kwargs)
+        if best is None:
+            break
+        pgraph.merge_partitions(*best)
+        val = pgraph.value(**kwargs)
+        if val > best_part[0] and pgraph.np <= kmax:
+            best_part = (val, pgraph.partition())
+
+    pgraph.set_partition(best_part[1])
